@@ -1,0 +1,2584 @@
+<!-- AI-ARCHITECT-BANNER
+Tác giả: TDA
+Liên hệ: 0986509106
+TDA — Think Daily. Act AI
+© 2026
+-->
+<script>
+/**
+ * EduClass AI - Frontend Client Logic
+ * Triển khai các hàm điều khiển giao diện, tương tác google.script.run, optimistic UI & offline queue
+ */
+
+// Biến trạng thái toàn cục phía Client
+var appState = {
+  currentView: 'dashboard-view',
+  currentUser: { email: '', role: 'TEACHER' },
+  students: [],
+  classes: [],
+  sessions: [],
+  attendance: [],
+  scores: [],
+  fees: [],
+  materials: [],
+  comments: [],
+  isOnline: navigator.onLine,
+  mutationQueue: [],
+  confirmCallback: null,
+  activeModalAction: null
+};
+
+// Khởi chạy khi tài liệu tải xong
+document.addEventListener('DOMContentLoaded', function() {
+  initializeUI();
+});
+
+/**
+ * Khởi tạo giao diện người dùng và gán sự kiện
+ */
+function initializeUI() {
+  // Đăng ký sự kiện mạng
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
+
+  // Đăng ký sự kiện điều hướng menu
+  var navMap = [
+    { id: 'dashboard-link', view: 'dashboard-view' },
+    { id: 'students-link', view: 'students-view' },
+    { id: 'classes-link', view: 'classes-view' },
+    { id: 'schedule-link', view: 'schedule-view' },
+    { id: 'attendance-link', view: 'attendance-view' },
+    { id: 'scores-link', view: 'scores-view' },
+    { id: 'fees-link', view: 'fees-view' },
+    { id: 'materials-link', view: 'materials-view' },
+    { id: 'comments-link', view: 'comments-view' },
+    { id: 'reports-link', view: 'reports-view' },
+    { id: 'ai-assistant-link', view: 'ai-assistant-view' }
+  ];
+
+  navMap.forEach(function(item) {
+    var el = document.getElementById(item.id);
+    if (el) {
+      el.addEventListener('click', function(e) {
+        e.preventDefault();
+        showView(item.view);
+      });
+    }
+  });
+
+  // Sự kiện nút đăng xuất
+  var logoutLink = document.getElementById('logout-link');
+  if (logoutLink) {
+    logoutLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      handleLogout();
+    });
+  }
+  var btnLogout = document.getElementById('btn-logout');
+  if (btnLogout) {
+    btnLogout.addEventListener('click', function(e) {
+      e.preventDefault();
+      handleLogout();
+    });
+  }
+
+  // Nút tìm kiếm, lọc, xuất file
+  var btnSearch = document.getElementById('btn-search');
+  if (btnSearch) {
+    btnSearch.addEventListener('click', handleSearch);
+  }
+  var btnFilter = document.getElementById('btn-filter');
+  if (btnFilter) {
+    btnFilter.addEventListener('click', handleFilter);
+  }
+  var btnExport = document.getElementById('btn-export');
+  if (btnExport) {
+    btnExport.addEventListener('click', handleExport);
+  }
+
+  // Ô nhập tìm kiếm nhanh
+  var studentSearchInput = document.getElementById('student-search-input');
+  if (studentSearchInput) {
+    studentSearchInput.addEventListener('keyup', function(e) {
+      if (e.key === 'Enter') handleSearch(e);
+    });
+  }
+
+  // Nút xác nhận & hủy của Modal chung
+  var btnSave = document.getElementById('btn-save');
+  if (btnSave) {
+    btnSave.addEventListener('click', function(e) {
+      if (typeof appState.activeModalAction === 'function') {
+        appState.activeModalAction(e);
+      }
+    });
+  }
+  var btnCancel = document.getElementById('btn-cancel');
+  if (btnCancel) {
+    btnCancel.addEventListener('click', function() {
+      closeGenericModal();
+    });
+  }
+
+  // Bộ chọn lớp cho Điểm danh & Báo cáo
+  var attClassSel = document.getElementById('attendance-class-select');
+  if (attClassSel) {
+    attClassSel.addEventListener('change', function() {
+      loadSessionsForAttendance(this.value);
+    });
+  }
+
+  var scoreClassSel = document.getElementById('score-class-select');
+  if (scoreClassSel) {
+    scoreClassSel.addEventListener('change', function() {
+      renderScores();
+    });
+  }
+
+  var feeClassSel = document.getElementById('fee-class-select');
+  if (feeClassSel) {
+    feeClassSel.addEventListener('change', function() {
+      renderFees();
+    });
+  }
+
+  var matClassSel = document.getElementById('material-class-select');
+  if (matClassSel) {
+    matClassSel.addEventListener('change', function() {
+      renderMaterials();
+    });
+  }
+
+  var cmtClassSel = document.getElementById('comment-class-select');
+  if (cmtClassSel) {
+    cmtClassSel.addEventListener('change', function() {
+      renderComments();
+    });
+  }
+
+  var reportTypeSel = document.getElementById('report-type-select');
+  if (reportTypeSel) {
+    reportTypeSel.addEventListener('change', function() {
+      renderReports();
+    });
+  }
+
+  // Tải thông tin người dùng từ máy chủ
+  loadInitialUserInfo();
+
+  // Khôi phục hàng đợi offline nếu có
+  try {
+    var savedQueue = localStorage.getItem('educlass_mutation_queue');
+    if (savedQueue) {
+      appState.mutationQueue = JSON.parse(savedQueue) || [];
+    }
+  } catch (err) {
+    console.warn('Lỗi đọc local storage:', err);
+  }
+
+  // Tải dữ liệu ban đầu cho hệ thống
+  fetchAppData(function() {
+    showView('dashboard-view');
+  });
+}
+
+/**
+ * Lấy thông tin tài khoản người dùng đăng nhập
+ */
+function loadInitialUserInfo() {
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(email) {
+        appState.currentUser.email = email || 'user@educlass.ai';
+        var userEmailEl = document.getElementById('user-email');
+        if (userEmailEl) userEmailEl.textContent = appState.currentUser.email;
+      })
+      .withFailureHandler(function() {
+        var userEmailEl = document.getElementById('user-email');
+        if (userEmailEl) userEmailEl.textContent = 'teacher@educlass.ai';
+      })
+      .getUserEmail();
+
+    google.script.run
+      .withSuccessHandler(function(role) {
+        appState.currentUser.role = role || 'TEACHER';
+      })
+      .getUserRole();
+  } else {
+    var userEmailEl = document.getElementById('user-email');
+    if (userEmailEl) userEmailEl.textContent = 'dev-preview@educlass.ai';
+  }
+}
+
+/**
+ * Tải toàn bộ danh mục cốt lõi phục vụ hiển thị
+ */
+function fetchAppData(onComplete) {
+  showLoading(true);
+  var pendingCalls = 3;
+
+  function checkDone() {
+    pendingCalls--;
+    if (pendingCalls <= 0) {
+      showLoading(false);
+      populateDropdowns();
+      if (typeof onComplete === 'function') onComplete();
+    }
+  }
+
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(students) {
+        appState.students = Array.isArray(students) ? students : [];
+        checkDone();
+      })
+      .withFailureHandler(function(err) {
+        showError('Không thể tải danh sách học sinh: ' + (err.message || err));
+        checkDone();
+      })
+      .getStudents(100, '');
+
+    google.script.run
+      .withSuccessHandler(function(classes) {
+        appState.classes = Array.isArray(classes) ? classes : [];
+        checkDone();
+      })
+      .withFailureHandler(function(err) {
+        showError('Không thể tải danh sách lớp học: ' + (err.message || err));
+        checkDone();
+      })
+      .getClasses(100, '');
+
+    google.script.run
+      .withSuccessHandler(function(sessions) {
+        appState.sessions = Array.isArray(sessions) ? sessions : [];
+        checkDone();
+      })
+      .withFailureHandler(function(err) {
+        showError('Không thể tải danh sách buổi học: ' + (err.message || err));
+        checkDone();
+      })
+      .getSessions('', 100, '');
+  } else {
+    // Chế độ mô phỏng ngoài môi trường Apps Script
+    appState.students = [
+      { studentId: 'STD001', code: 'HS001', fullName: 'Nguyễn Văn An', dob: '2008-05-15', gender: 'Nam', phone: '0912345678', email: 'an.nguyen@example.com', parentName: 'Nguyễn Văn Bình', parentPhone: '0987654321', parentEmail: 'binh.nguyen@example.com', school: 'THCS Lê Quý Đôn', grade: '9', status: 'ACTIVE', startDate: '2024-01-10', note: 'Học lực khá, cần bồi dưỡng thêm hình học' },
+      { studentId: 'STD002', code: 'HS002', fullName: 'Trần Thị Mai', dob: '2008-08-20', gender: 'Nữ', phone: '0923456789', email: 'mai.tran@example.com', parentName: 'Trần Văn Cường', parentPhone: '0978123456', parentEmail: 'cuong.tran@example.com', school: 'THCS Thăng Long', grade: '9', status: 'ACTIVE', startDate: '2024-01-10', note: 'Chăm chỉ, tích cực phát biểu' }
+    ];
+    appState.classes = [
+      { classId: 'CLS001', className: 'Toán 9 Nâng Cao - Ôn thi vào 10', subject: 'Toán Học', level: 'Lớp 9', teacherId: 'TCH001', room: 'Phòng 201', startDate: '2024-01-15', endDate: '2024-06-30', status: 'ACTIVE', tuitionType: 'SESSION', defaultFee: 200000, color: '#3b82f6', scheduleJson: '{"dayOfWeek":2,"time":"18:00 - 20:00"}' }
+    ];
+    appState.sessions = [
+      { sessionId: 'SES001', classId: 'CLS001', startTime: '2025-01-14T18:00:00', endTime: '2025-01-14T20:00:00', duration: 120, teacherId: 'TCH001', topic: 'Hệ thức Vi-ét và Ứng dụng', content: 'Luyện tập phương trình bậc hai có tham số', homework: 'Bài 1, 2, 3 SGK trang 45', status: 'COMPLETED' }
+    ];
+    checkDone();
+    checkDone();
+    checkDone();
+  }
+}
+
+/**
+ * Đổ dữ liệu vào các thẻ select chọn lớp
+ */
+function populateDropdowns() {
+  var classSelectors = [
+    'attendance-class-select',
+    'score-class-select',
+    'fee-class-select',
+    'material-class-select',
+    'comment-class-select',
+    'schedule-class-filter'
+  ];
+
+  classSelectors.forEach(function(selId) {
+    var sel = document.getElementById(selId);
+    if (!sel) return;
+    var currentVal = sel.value;
+    sel.innerHTML = '<option value="">-- Tất cả lớp học --</option>';
+    appState.classes.forEach(function(c) {
+      var opt = document.createElement('option');
+      opt.value = c.classId;
+      opt.textContent = c.className + ' (' + c.subject + ')';
+      sel.appendChild(opt);
+    });
+    if (currentVal) sel.value = currentVal;
+  });
+}
+
+/**
+ * Hiển thị màn hình được chọn và cập nhật thanh điều hướng
+ */
+function showView(viewId) {
+  var views = [
+    'dashboard-view',
+    'students-view',
+    'classes-view',
+    'schedule-view',
+    'attendance-view',
+    'scores-view',
+    'fees-view',
+    'materials-view',
+    'comments-view',
+    'reports-view',
+    'ai-assistant-view'
+  ];
+
+  views.forEach(function(vId) {
+    var el = document.getElementById(vId);
+    if (el) {
+      if (vId === viewId) {
+        el.style.display = 'block';
+        el.classList.add('active-view');
+      } else {
+        el.style.display = 'none';
+        el.classList.remove('active-view');
+      }
+    }
+  });
+
+  // Đổi trạng thái active trên thanh menu
+  var navMap = {
+    'dashboard-view': 'dashboard-link',
+    'students-view': 'students-link',
+    'classes-view': 'classes-link',
+    'schedule-view': 'schedule-link',
+    'attendance-view': 'attendance-link',
+    'scores-view': 'scores-link',
+    'fees-view': 'fees-link',
+    'materials-view': 'materials-link',
+    'comments-view': 'comments-link',
+    'reports-view': 'reports-link',
+    'ai-assistant-view': 'ai-assistant-link'
+  };
+
+  Object.keys(navMap).forEach(function(v) {
+    var linkEl = document.getElementById(navMap[v]);
+    if (linkEl) {
+      if (v === viewId) {
+        linkEl.classList.add('active');
+      } else {
+        linkEl.classList.remove('active');
+      }
+    }
+  });
+
+  // Cập nhật tiêu đề trang
+  var viewTitleEl = document.getElementById('view-title');
+  var titleMap = {
+    'dashboard-view': 'Bảng Điều Khiển Tổng Quan',
+    'students-view': 'Quản Lý Học Sinh',
+    'classes-view': 'Quản Lý Lớp Học',
+    'schedule-view': 'Lịch Dạy & Buổi Học',
+    'attendance-view': 'Điểm Danh Học Viên',
+    'scores-view': 'Quản Lý Điểm Số & Đánh Giá',
+    'fees-view': 'Quản Lý Học Phí & Thu Chi',
+    'materials-view': 'Kho Tài Liệu & Học Liệu',
+    'comments-view': 'Nhận Xét & Đánh Giá Học Sinh',
+    'reports-view': 'Báo Cáo Thống Kê & Phân Tích',
+    'ai-assistant-view': 'Trợ Lý Trí Tuệ Nhân Tạo (EduClass AI)'
+  };
+  if (viewTitleEl && titleMap[viewId]) {
+    viewTitleEl.textContent = titleMap[viewId];
+  }
+
+  appState.currentView = viewId;
+
+  // Kích hoạt render tương ứng
+  switch (viewId) {
+    case 'dashboard-view':
+      renderDashboard();
+      break;
+    case 'students-view':
+      renderStudents();
+      break;
+    case 'classes-view':
+      renderClasses();
+      break;
+    case 'schedule-view':
+      renderSchedule();
+      break;
+    case 'attendance-view':
+      renderAttendance();
+      break;
+    case 'scores-view':
+      renderScores();
+      break;
+    case 'fees-view':
+      renderFees();
+      break;
+    case 'materials-view':
+      renderMaterials();
+      break;
+    case 'comments-view':
+      renderComments();
+      break;
+    case 'reports-view':
+      renderReports();
+      break;
+    case 'ai-assistant-view':
+      renderAiAssistant();
+      break;
+  }
+}
+
+/**
+ * Hiển thị số liệu và lịch trình trên Dashboard
+ */
+function renderDashboard() {
+  var totalStudentsEl = document.getElementById('dash-total-students');
+  var activeClassesEl = document.getElementById('dash-active-classes');
+  var todaySessionsEl = document.getElementById('dash-today-sessions');
+  var pendingFeesEl = document.getElementById('dash-pending-fees');
+  var scheduleTbody = document.getElementById('dash-schedule-tbody');
+
+  var activeStudents = appState.students.filter(function(s) {
+    return s.status === 'ACTIVE' || !s.status;
+  });
+  if (totalStudentsEl) totalStudentsEl.textContent = activeStudents.length;
+
+  var activeClasses = appState.classes.filter(function(c) {
+    return c.status === 'ACTIVE' || !c.status;
+  });
+  if (activeClassesEl) activeClassesEl.textContent = activeClasses.length;
+
+  var todayStr = new Date().toISOString().slice(0, 10);
+  var todaySessions = appState.sessions.filter(function(s) {
+    return s.startTime && s.startTime.indexOf(todayStr) === 0;
+  });
+  if (todaySessionsEl) todaySessionsEl.textContent = todaySessions.length;
+
+  var pendingFees = appState.fees.filter(function(f) {
+    return f.status === 'UNPAID' || f.status === 'PARTIAL';
+  });
+  if (pendingFeesEl) pendingFeesEl.textContent = pendingFees.length;
+
+  if (scheduleTbody) {
+    scheduleTbody.innerHTML = '';
+    var list = appState.sessions.slice(0, 5);
+    if (list.length === 0) {
+      scheduleTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Chưa có lịch dạy nào trong tuần này.</td></tr>';
+    } else {
+      list.forEach(function(s) {
+        var cls = appState.classes.find(function(c) { return c.classId === s.classId; }) || {};
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td><strong>' + escapeHtml(cls.className || s.classId) + '</strong></td>' +
+          '<td>' + escapeHtml(s.topic || 'Buổi học định kỳ') + '</td>' +
+          '<td>' + formatDisplayDateTime(s.startTime) + '</td>' +
+          '<td>' + escapeHtml(s.duration || 90) + ' phút</td>' +
+          '<td><span class="badge badge-' + (s.status === 'COMPLETED' ? 'success' : 'primary') + '">' + escapeHtml(s.status || 'SCHEDULED') + '</span></td>';
+        scheduleTbody.appendChild(tr);
+      });
+    }
+  }
+}
+
+/**
+ * Hiển thị danh sách học sinh
+ */
+function renderStudents() {
+  var tbody = document.getElementById('students-tbody');
+  if (!tbody) return;
+
+  var searchTerm = '';
+  var searchInput = document.getElementById('student-search-input');
+  if (searchInput) searchTerm = searchInput.value.trim().toLowerCase();
+
+  var filtered = appState.students.filter(function(s) {
+    if (!searchTerm) return true;
+    var name = (s.fullName || '').toLowerCase();
+    var code = (s.code || '').toLowerCase();
+    var phone = (s.phone || '').toLowerCase();
+    var pPhone = (s.parentPhone || '').toLowerCase();
+    return name.indexOf(searchTerm) !== -1 || code.indexOf(searchTerm) !== -1 || phone.indexOf(searchTerm) !== -1 || pPhone.indexOf(searchTerm) !== -1;
+  });
+
+  tbody.innerHTML = '';
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Không tìm thấy học sinh nào phù hợp.</td></tr>';
+    return;
+  }
+
+  filtered.forEach(function(s) {
+    var tr = document.createElement('tr');
+    tr.id = 'student-row-' + s.studentId;
+    tr.innerHTML = '<td><strong>' + escapeHtml(s.code || s.studentId) + '</strong></td>' +
+      '<td>' + escapeHtml(s.fullName) + '</td>' +
+      '<td>' + escapeHtml(s.gender || '---') + '</td>' +
+      '<td>' + escapeHtml(s.phone || s.parentPhone || '---') + '</td>' +
+      '<td>' + escapeHtml(s.school || '---') + ' (K' + escapeHtml(s.grade || '') + ')</td>' +
+      '<td><span class="badge badge-' + (s.status === 'ACTIVE' ? 'success' : 'warning') + '">' + escapeHtml(s.status || 'ACTIVE') + '</span></td>' +
+      '<td>' +
+        '<button class="btn btn-sm btn-outline-primary mr-1" onclick="openStudentModal(\'' + s.studentId + '\')">Sửa</button>' +
+        '<button class="btn btn-sm btn-outline-danger" onclick="deleteStudentAction(\'' + s.studentId + '\')">Xóa</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Hiển thị danh sách lớp học
+ */
+function renderClasses() {
+  var grid = document.getElementById('classes-grid');
+  if (!grid) return;
+
+  var searchInput = document.getElementById('class-search-input');
+  var filterTerm = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+  var filtered = appState.classes.filter(function(c) {
+    if (!filterTerm) return true;
+    return (c.className || '').toLowerCase().indexOf(filterTerm) !== -1 ||
+           (c.subject || '').toLowerCase().indexOf(filterTerm) !== -1;
+  });
+
+  grid.innerHTML = '';
+  if (filtered.length === 0) {
+    grid.innerHTML = '<div class="col-12 text-center text-muted py-5">Chưa có lớp học nào. Nhấn "Thêm Lớp Mới" để bắt đầu.</div>';
+    return;
+  }
+
+  filtered.forEach(function(c) {
+    var card = document.createElement('div');
+    card.className = 'class-card card shadow-sm';
+    var colorBar = c.color || '#3b82f6';
+    card.style.borderTop = '4px solid ' + colorBar;
+    card.innerHTML = '<div class="card-body">' +
+      '<div class="d-flex justify-content-between align-items-center mb-2">' +
+        '<span class="badge badge-light">' + escapeHtml(c.level || 'Khối phổ thông') + '</span>' +
+        '<span class="badge badge-' + (c.status === 'ACTIVE' ? 'success' : 'secondary') + '">' + escapeHtml(c.status || 'ACTIVE') + '</span>' +
+      '</div>' +
+      '<h5 class="card-title text-truncate" title="' + escapeHtml(c.className) + '">' + escapeHtml(c.className) + '</h5>' +
+      '<p class="card-text text-muted mb-2">Môn học: <strong>' + escapeHtml(c.subject) + '</strong></p>' +
+      '<p class="card-text text-muted mb-2">Phòng: <strong>' + escapeHtml(c.room || 'Phòng học số') + '</strong></p>' +
+      '<p class="card-text text-muted mb-3">Học phí: <strong>' + formatVND(c.defaultFee || 0) + '</strong> / ' + (c.tuitionType === 'MONTHLY' ? 'tháng' : 'buổi') + '</p>' +
+      '<div class="d-flex justify-content-end">' +
+        '<button class="btn btn-sm btn-outline-primary mr-2" onclick="openClassModal(\'' + c.classId + '\')">Chi tiết / Sửa</button>' +
+        '<button class="btn btn-sm btn-outline-danger" onclick="deleteClassAction(\'' + c.classId + '\')">Xóa</button>' +
+      '</div>' +
+    '</div>';
+    grid.appendChild(card);
+  });
+}
+
+/**
+ * Hiển thị lịch dạy và danh sách buổi học
+ */
+function renderSchedule() {
+  var tbody = document.getElementById('schedule-tbody');
+  if (!tbody) return;
+
+  var filterSel = document.getElementById('schedule-class-filter');
+  var classIdFilter = filterSel ? filterSel.value : '';
+
+  var filtered = appState.sessions.filter(function(s) {
+    if (!classIdFilter) return true;
+    return s.classId === classIdFilter;
+  });
+
+  tbody.innerHTML = '';
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Chưa có buổi học nào được tạo.</td></tr>';
+    return;
+  }
+
+  filtered.forEach(function(s) {
+    var cls = appState.classes.find(function(c) { return c.classId === s.classId; }) || {};
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><strong>' + escapeHtml(cls.className || s.classId) + '</strong></td>' +
+      '<td>' + escapeHtml(s.topic || 'Chủ đề bài học') + '</td>' +
+      '<td>' + formatDisplayDateTime(s.startTime) + '</td>' +
+      '<td>' + escapeHtml(s.duration || 90) + ' phút</td>' +
+      '<td>' + escapeHtml(s.homework || '---') + '</td>' +
+      '<td><span class="badge badge-' + (s.status === 'COMPLETED' ? 'success' : 'info') + '">' + escapeHtml(s.status || 'SCHEDULED') + '</span></td>' +
+      '<td>' +
+        '<button class="btn btn-sm btn-outline-primary mr-1" onclick="openSessionModal(\'' + s.sessionId + '\')">Sửa</button>' +
+        '<button class="btn btn-sm btn-outline-danger" onclick="deleteSessionAction(\'' + s.sessionId + '\')">Xóa</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Hiển thị bảng điểm danh
+ */
+function renderAttendance() {
+  var tbody = document.getElementById('attendance-tbody');
+  var classSel = document.getElementById('attendance-class-select');
+  var sessionSel = document.getElementById('attendance-session-select');
+  if (!tbody || !classSel) return;
+
+  var selectedClass = classSel.value;
+  var selectedSession = sessionSel ? sessionSel.value : '';
+
+  if (!selectedClass) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Vui lòng chọn lớp học để xem và điểm danh.</td></tr>';
+    return;
+  }
+
+  // Tải danh sách điểm danh từ server nếu có session cụ thể
+  if (selectedSession && typeof google !== 'undefined' && google.script && google.script.run) {
+    showLoading(true);
+    google.script.run
+      .withSuccessHandler(function(records) {
+        showLoading(false);
+        appState.attendance = Array.isArray(records) ? records : [];
+        renderAttendanceRows(selectedClass, selectedSession);
+      })
+      .withFailureHandler(function(err) {
+        showLoading(false);
+        showError('Lỗi tải điểm danh: ' + (err.message || err));
+        renderAttendanceRows(selectedClass, selectedSession);
+      })
+      .getAttendanceBySession(selectedSession);
+  } else {
+    renderAttendanceRows(selectedClass, selectedSession);
+  }
+}
+
+/**
+ * Vẽ dòng học sinh điểm danh
+ */
+function renderAttendanceRows(classId, sessionId) {
+  var tbody = document.getElementById('attendance-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = '';
+  if (appState.students.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Chưa có dữ liệu học sinh trong hệ thống.</td></tr>';
+    return;
+  }
+
+  appState.students.forEach(function(std) {
+    var existing = appState.attendance.find(function(a) {
+      return a.studentId === std.studentId && (!sessionId || a.sessionId === sessionId);
+    });
+    var status = existing ? existing.status : 'PRESENT';
+    var note = existing ? (existing.note || '') : '';
+
+    var tr = document.createElement('tr');
+    tr.dataset.studentId = std.studentId;
+    tr.innerHTML = '<td><strong>' + escapeHtml(std.code || std.studentId) + '</strong></td>' +
+      '<td>' + escapeHtml(std.fullName) + '</td>' +
+      '<td>' +
+        '<select class="form-control form-control-sm attendance-status-select" data-student-id="' + std.studentId + '">' +
+          '<option value="PRESENT"' + (status === 'PRESENT' ? ' selected' : '') + '>Có mặt</option>' +
+          '<option value="ABSENT"' + (status === 'ABSENT' ? ' selected' : '') + '>Vắng có phép</option>' +
+          '<option value="UNEXCUSED"' + (status === 'UNEXCUSED' ? ' selected' : '') + '>Vắng không phép</option>' +
+          '<option value="LATE"' + (status === 'LATE' ? ' selected' : '') + '>Đi muộn</option>' +
+        '</select>' +
+      '</td>' +
+      '<td>' +
+        '<input type="text" class="form-control form-control-sm attendance-note-input" data-student-id="' + std.studentId + '" placeholder="Ghi chú điểm danh..." value="' + escapeHtml(note) + '">' +
+      '</td>' +
+      '<td>' +
+        '<input type="checkbox" class="attendance-fee-counted" data-student-id="' + std.studentId + '"' + ((!existing || existing.feeCounted) ? ' checked' : '') + '> Tính học phí' +
+      '</td>' +
+      '<td>' +
+        '<button type="button" class="btn btn-sm btn-outline-success" onclick="quickMarkPresent(\'' + std.studentId + '\')">Một chạm</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Tải các buổi học vào dropdown buổi học điểm danh
+ */
+function loadSessionsForAttendance(classId) {
+  var sessionSel = document.getElementById('attendance-session-select');
+  if (!sessionSel) return;
+  sessionSel.innerHTML = '<option value="">-- Chọn buổi học --</option>';
+
+  var matched = appState.sessions.filter(function(s) {
+    return !classId || s.classId === classId;
+  });
+
+  matched.forEach(function(s) {
+    var opt = document.createElement('option');
+    opt.value = s.sessionId;
+    opt.textContent = formatDisplayDateTime(s.startTime) + ' - ' + (s.topic || 'Buổi học');
+    sessionSel.appendChild(opt);
+  });
+
+  if (matched.length > 0) {
+    sessionSel.value = matched[0].sessionId;
+  }
+  renderAttendance();
+}
+
+/**
+ * Đánh dấu nhanh có mặt 1 chạm
+ */
+function quickMarkPresent(studentId) {
+  var sel = document.querySelector('.attendance-status-select[data-student-id="' + studentId + '"]');
+  if (sel) sel.value = 'PRESENT';
+  showSuccess('Đã đánh dấu có mặt nhanh cho học sinh');
+}
+
+/**
+ * Đánh dấu tất cả có mặt
+ */
+function markAllPresent() {
+  var selects = document.querySelectorAll('.attendance-status-select');
+  selects.forEach(function(s) {
+    s.value = 'PRESENT';
+  });
+  showSuccess('Đã chọn tất cả có mặt!');
+}
+
+/**
+ * Hiển thị bảng điểm
+ */
+function renderScores() {
+  var tbody = document.getElementById('scores-tbody');
+  var classSel = document.getElementById('score-class-select');
+  if (!tbody) return;
+
+  var selectedClass = classSel ? classSel.value : '';
+  tbody.innerHTML = '';
+
+  var filtered = appState.scores.filter(function(sc) {
+    if (!selectedClass) return true;
+    return sc.classId === selectedClass;
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Chưa có cột điểm nào. Nhấn "Nhập Điểm" để bổ sung điểm kiểm tra.</td></tr>';
+    return;
+  }
+
+  filtered.forEach(function(sc) {
+    var std = appState.students.find(function(s) { return s.studentId === sc.studentId; }) || {};
+    var cls = appState.classes.find(function(c) { return c.classId === sc.classId; }) || {};
+
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><strong>' + escapeHtml(std.fullName || sc.studentId) + '</strong></td>' +
+      '<td>' + escapeHtml(cls.className || sc.classId) + '</td>' +
+      '<td>' + escapeHtml(sc.scoreType || 'Kiểm tra') + '</td>' +
+      '<td><span class="badge badge-' + (sc.score >= 8 ? 'success' : (sc.score >= 5 ? 'primary' : 'danger')) + ' font-weight-bold" style="font-size:1rem;">' + sc.score + ' / ' + (sc.scale || 10) + '</span></td>' +
+      '<td>' + escapeHtml(sc.weight || 1) + '</td>' +
+      '<td>' + escapeHtml(sc.comment || '---') + '</td>' +
+      '<td>' +
+        '<button class="btn btn-sm btn-outline-primary" onclick="openScoreModal(\'' + sc.scoreId + '\')">Sửa</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Hiển thị học phí
+ */
+function renderFees() {
+  var tbody = document.getElementById('fees-tbody');
+  var classSel = document.getElementById('fee-class-select');
+  if (!tbody) return;
+
+  var selectedClass = classSel ? classSel.value : '';
+  tbody.innerHTML = '';
+
+  var filtered = appState.fees.filter(function(f) {
+    if (!selectedClass) return true;
+    return f.classId === selectedClass;
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Chưa có bản ghi học phí nào. Nhấn "Tạo Học Phí" để lập biểu phí.</td></tr>';
+    return;
+  }
+
+  filtered.forEach(function(f) {
+    var std = appState.students.find(function(s) { return s.studentId === f.studentId; }) || {};
+    var cls = appState.classes.find(function(c) { return c.classId === f.classId; }) || {};
+
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><strong>' + escapeHtml(std.fullName || f.studentId) + '</strong></td>' +
+      '<td>' + escapeHtml(cls.className || f.classId) + '</td>' +
+      '<td>' + escapeHtml(f.period) + '</td>' +
+      '<td>' + formatVND(f.total || 0) + '</td>' +
+      '<td>' + formatVND(f.paid || 0) + '</td>' +
+      '<td><strong class="text-danger">' + formatVND(f.balance || 0) + '</strong></td>' +
+      '<td><span class="badge badge-' + (f.status === 'PAID' ? 'success' : (f.status === 'PARTIAL' ? 'warning' : 'danger')) + '">' + escapeHtml(f.status || 'UNPAID') + '</span></td>' +
+      '<td>' +
+        '<button class="btn btn-sm btn-outline-success mr-1" onclick="openPaymentModal(\'' + f.feeId + '\')">Thu phí</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Hiển thị học liệu
+ */
+function renderMaterials() {
+  var grid = document.getElementById('materials-grid');
+  var classSel = document.getElementById('material-class-select');
+  if (!grid) return;
+
+  var selectedClass = classSel ? classSel.value : '';
+  var filtered = appState.materials.filter(function(m) {
+    if (!selectedClass) return true;
+    return m.classId === selectedClass;
+  });
+
+  grid.innerHTML = '';
+  if (filtered.length === 0) {
+    grid.innerHTML = '<div class="col-12 text-center text-muted py-5">Chưa có tài liệu nào. Nhấn "Thêm Tài Liệu" để chia sẻ bài giảng, đề cương.</div>';
+    return;
+  }
+
+  filtered.forEach(function(m) {
+    var col = document.createElement('div');
+    col.className = 'material-card card shadow-sm mb-3';
+    col.innerHTML = '<div class="card-body">' +
+      '<div class="d-flex justify-content-between align-items-center mb-2">' +
+        '<span class="badge badge-info">' + escapeHtml(m.type) + '</span>' +
+        '<span class="badge badge-light">' + escapeHtml(m.topic || 'Chủ đề chung') + '</span>' +
+      '</div>' +
+      '<h5 class="card-title text-truncate">' + escapeHtml(m.title) + '</h5>' +
+      '<p class="card-text"><a href="' + escapeHtml(m.url || '#') + '" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary">Mở Tài Liệu &rarr;</a></p>' +
+    '</div>';
+    grid.appendChild(col);
+  });
+}
+
+/**
+ * Hiển thị nhận xét của học sinh
+ */
+function renderComments() {
+  var tbody = document.getElementById('comments-tbody');
+  var classSel = document.getElementById('comment-class-select');
+  if (!tbody) return;
+
+  var selectedClass = classSel ? classSel.value : '';
+  tbody.innerHTML = '';
+
+  var filtered = appState.comments.filter(function(c) {
+    if (!selectedClass) return true;
+    return c.classId === selectedClass;
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Chưa có nhận xét nào. Nhấn "Thêm Nhận Xét" hoặc dùng AI Assistant để sinh nhận xét tự động.</td></tr>';
+    return;
+  }
+
+  filtered.forEach(function(c) {
+    var std = appState.students.find(function(s) { return s.studentId === c.studentId; }) || {};
+    var cls = appState.classes.find(function(cl) { return cl.classId === c.classId; }) || {};
+
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><strong>' + escapeHtml(std.fullName || c.studentId) + '</strong></td>' +
+      '<td>' + escapeHtml(cls.className || c.classId) + '</td>' +
+      '<td>' + escapeHtml(c.type || 'Hàng tháng') + '</td>' +
+      '<td>' + escapeHtml(c.content) + '</td>' +
+      '<td>' + (c.aiGenerated ? '<span class="badge badge-primary">AI Hỗ Trợ</span>' : '<span class="badge badge-secondary">Giáo viên</span>') + '</td>' +
+      '<td><span class="badge badge-light">' + escapeHtml(c.visibility || 'PUBLIC') + '</span></td>';
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Hiển thị báo cáo thống kê
+ */
+function renderReports() {
+  var reportTypeSel = document.getElementById('report-type-select');
+  var contentEl = document.getElementById('report-content');
+  if (!contentEl) return;
+
+  var reportType = reportTypeSel ? reportTypeSel.value : 'ATTENDANCE';
+  contentEl.innerHTML = '';
+
+  if (reportType === 'ATTENDANCE') {
+    var totalAtt = appState.attendance.length;
+    var presentCount = appState.attendance.filter(function(a) { return a.status === 'PRESENT'; }).length;
+    var rate = totalAtt > 0 ? Math.round((presentCount / totalAtt) * 100) : 100;
+
+    contentEl.innerHTML = '<div class="report-box p-4 bg-white rounded shadow-sm">' +
+      '<h4 class="mb-3 text-primary">Báo Cáo Chuyên Cần Toàn Trung Tâm</h4>' +
+      '<div class="row">' +
+        '<div class="col-md-4"><div class="stat-card p-3 border rounded"><h5>Tổng lượt điểm danh</h5><h3>' + totalAtt + '</h3></div></div>' +
+        '<div class="col-md-4"><div class="stat-card p-3 border rounded"><h5>Số lượt có mặt</h5><h3 class="text-success">' + presentCount + '</h3></div></div>' +
+        '<div class="col-md-4"><div class="stat-card p-3 border rounded"><h5>Tỷ lệ chuyên cần</h5><h3 class="text-info">' + rate + '%</h3></div></div>' +
+      '</div>' +
+    '</div>';
+  } else if (reportType === 'FINANCE') {
+    var totalBilled = 0;
+    var totalCollected = 0;
+    appState.fees.forEach(function(f) {
+      totalBilled += Number(f.total || 0);
+      totalCollected += Number(f.paid || 0);
+    });
+    var outstanding = totalBilled - totalCollected;
+
+    contentEl.innerHTML = '<div class="report-box p-4 bg-white rounded shadow-sm">' +
+      '<h4 class="mb-3 text-primary">Báo Cáo Tài Chính & Doanh Thu</h4>' +
+      '<div class="row">' +
+        '<div class="col-md-4"><div class="stat-card p-3 border rounded"><h5>Tổng học phí phát sinh</h5><h3 class="text-primary">' + formatVND(totalBilled) + '</h3></div></div>' +
+        '<div class="col-md-4"><div class="stat-card p-3 border rounded"><h5>Đã thực thu</h5><h3 class="text-success">' + formatVND(totalCollected) + '</h3></div></div>' +
+        '<div class="col-md-4"><div class="stat-card p-3 border rounded"><h5>Còn phải thu (Dư nợ)</h5><h3 class="text-danger">' + formatVND(outstanding) + '</h3></div></div>' +
+      '</div>' +
+    '</div>';
+  } else {
+    contentEl.innerHTML = '<div class="p-4 bg-white rounded shadow-sm text-center text-muted">Báo cáo đang được đồng bộ theo thời gian thực.</div>';
+  }
+}
+
+/**
+ * Hiển thị giao diện AI Assistant
+ */
+function renderAiAssistant() {
+  var titleEl = document.getElementById('ai-tool-title');
+  var inputEl = document.getElementById('ai-context-input');
+  var outputEl = document.getElementById('ai-result-output');
+
+  if (titleEl) titleEl.textContent = 'Trợ Lý AI Soạn Thảo & Đánh Giá';
+  if (inputEl && !inputEl.value) {
+    inputEl.placeholder = 'Nhập thông tin tình hình học tập của học sinh hoặc yêu cầu soạn thảo thông báo, đề thi...';
+  }
+  if (outputEl && !outputEl.textContent.trim()) {
+    outputEl.textContent = 'Kết quả phân tích từ Gemini AI sẽ xuất hiện tại đây...';
+  }
+}
+
+/**
+ * Kích hoạt công cụ AI hỗ trợ viết nhận xét hoặc nhắc phí
+ */
+function triggerAiGenerate(toolType) {
+  var inputEl = document.getElementById('ai-context-input');
+  var outputEl = document.getElementById('ai-result-output');
+  var promptContext = inputEl ? inputEl.value.trim() : '';
+
+  if (!promptContext) {
+    showError('Vui lòng nhập ngữ cảnh hoặc tên học sinh trước khi gọi AI.');
+    return;
+  }
+
+  showLoading(true);
+  if (outputEl) outputEl.textContent = 'Đang kết nối Gemini API để xử lý yêu cầu...';
+
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    // Gọi tạo nhận xét hoặc prompt
+    var commentPayload = {
+      commentId: 'CMT' + Date.now(),
+      studentId: appState.students[0] ? appState.students[0].studentId : 'STD001',
+      classId: appState.classes[0] ? appState.classes[0].classId : 'CLS001',
+      type: toolType || 'AI_SUMMARY',
+      content: promptContext,
+      aiGenerated: true,
+      visibility: 'PUBLIC',
+      createdBy: appState.currentUser.email,
+      createdAt: new Date().toISOString()
+    };
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        showLoading(false);
+        var reply = (res && res.content) ? res.content : ('Đã xử lý thành công yêu cầu: "' + promptContext + '"');
+        if (outputEl) outputEl.innerHTML = '<div class="p-3 bg-light rounded border"><p class="mb-0 text-dark">' + escapeHtml(reply).replace(/\n/g, '<br>') + '</p></div>';
+        showSuccess('AI đã phản hồi xong!');
+      })
+      .withFailureHandler(function(err) {
+        showLoading(false);
+        if (outputEl) outputEl.textContent = 'Lỗi gọi AI: ' + (err.message || err);
+        showError('Không thể hoàn tất tác vụ AI.');
+      })
+      .createComment(commentPayload);
+  } else {
+    setTimeout(function() {
+      showLoading(false);
+      var mockReply = 'Nhận xét AI: Học sinh có nhiều tiến bộ trong tư duy giải toán, tuy nhiên cần chú ý rèn tính cẩn thận trong các phép tính phân số. Tiếp tục duy trì phong độ hiện tại!';
+      if (outputEl) outputEl.innerHTML = '<div class="p-3 bg-light rounded border"><p class="mb-0 text-dark">' + mockReply + '</p></div>';
+      showSuccess('AI phản hồi giả lập thành công.');
+    }, 800);
+  }
+}
+
+/**
+ * Xử lý gửi Form học sinh
+ */
+function handleStudentFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var studentId = form.elements['studentId'].value || ('STD' + Date.now());
+  var isEdit = !!form.elements['isEdit'].value;
+
+  var studentData = {
+    studentId: studentId,
+    code: form.elements['code'].value.trim(),
+    fullName: form.elements['fullName'].value.trim(),
+    dob: form.elements['dob'].value,
+    gender: form.elements['gender'].value,
+    phone: form.elements['phone'].value.trim(),
+    email: form.elements['email'].value.trim(),
+    parentName: form.elements['parentName'].value.trim(),
+    parentPhone: form.elements['parentPhone'].value.trim(),
+    parentEmail: form.elements['parentEmail'].value.trim(),
+    school: form.elements['school'].value.trim(),
+    grade: form.elements['grade'].value.trim(),
+    status: form.elements['status'].value || 'ACTIVE',
+    startDate: form.elements['startDate'].value || new Date().toISOString().slice(0, 10),
+    note: form.elements['note'].value.trim(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  if (!studentData.fullName) {
+    showError('Vui lòng nhập họ và tên học sinh');
+    return;
+  }
+
+  // Optimistic Update
+  optimisticUpdate(studentData, isEdit ? 'UPDATE_STUDENT' : 'CREATE_STUDENT');
+  closeGenericModal();
+  showSuccess(isEdit ? 'Đang cập nhật học sinh...' : 'Đang thêm học sinh mới...');
+
+  var clientTxnId = 'TXN_' + Date.now();
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    if (isEdit) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          reconcileUpdate(clientTxnId, res);
+          showSuccess('Đã cập nhật học sinh thành công!');
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi cập nhật học sinh: ' + (err.message || err));
+        })
+        .updateStudent(studentId, studentData);
+    } else {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          reconcileUpdate(clientTxnId, res);
+          showSuccess('Đã thêm học sinh mới thành công!');
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi tạo học sinh: ' + (err.message || err));
+        })
+        .createStudent(studentData);
+    }
+  } else {
+    queueMutation({
+      type: isEdit ? 'UPDATE_STUDENT' : 'CREATE_STUDENT',
+      id: studentId,
+      data: studentData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi Form lớp học
+ */
+function handleClassFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var classId = form.elements['classId'].value || ('CLS' + Date.now());
+  var isEdit = !!form.elements['isEdit'].value;
+
+  var classData = {
+    classId: classId,
+    className: form.elements['className'].value.trim(),
+    subject: form.elements['subject'].value.trim(),
+    level: form.elements['level'].value.trim(),
+    teacherId: form.elements['teacherId'].value || 'TCH001',
+    assistantIds: [],
+    room: form.elements['room'].value.trim(),
+    startDate: form.elements['startDate'].value,
+    endDate: form.elements['endDate'].value,
+    status: form.elements['status'].value || 'ACTIVE',
+    tuitionType: form.elements['tuitionType'].value || 'SESSION',
+    defaultFee: Number(form.elements['defaultFee'].value) || 0,
+    color: form.elements['color'].value || '#3b82f6',
+    scheduleJson: form.elements['scheduleJson'].value.trim(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  if (!classData.className || !classData.subject) {
+    showError('Vui lòng nhập tên lớp và môn học.');
+    return;
+  }
+
+  optimisticUpdate(classData, isEdit ? 'UPDATE_CLASS' : 'CREATE_CLASS');
+  closeGenericModal();
+  showSuccess(isEdit ? 'Đang cập nhật lớp học...' : 'Đang tạo lớp học mới...');
+
+  var clientTxnId = 'TXN_' + Date.now();
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    if (isEdit) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          reconcileUpdate(clientTxnId, res);
+          showSuccess('Đã cập nhật lớp học thành công!');
+          populateDropdowns();
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi cập nhật lớp học: ' + (err.message || err));
+        })
+        .updateClass(classId, classData);
+    } else {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          reconcileUpdate(clientTxnId, res);
+          showSuccess('Đã thêm lớp học mới thành công!');
+          populateDropdowns();
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi tạo lớp học: ' + (err.message || err));
+        })
+        .createClass(classData);
+    }
+  } else {
+    queueMutation({
+      type: isEdit ? 'UPDATE_CLASS' : 'CREATE_CLASS',
+      id: classId,
+      data: classData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi Form buổi học
+ */
+function handleSessionFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var sessionId = form.elements['sessionId'].value || ('SES' + Date.now());
+  var isEdit = !!form.elements['isEdit'].value;
+
+  var sessionData = {
+    sessionId: sessionId,
+    classId: form.elements['classId'].value,
+    startTime: form.elements['startTime'].value,
+    endTime: form.elements['endTime'].value,
+    duration: Number(form.elements['duration'].value) || 90,
+    teacherId: form.elements['teacherId'].value || 'TCH001',
+    assistantIds: [],
+    topic: form.elements['topic'].value.trim(),
+    content: form.elements['content'].value.trim(),
+    homework: form.elements['homework'].value.trim(),
+    status: form.elements['status'].value || 'SCHEDULED',
+    calendarEventId: '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  if (!sessionData.classId || !sessionData.startTime) {
+    showError('Vui lòng chọn lớp và thời gian bắt đầu buổi học.');
+    return;
+  }
+
+  optimisticUpdate(sessionData, isEdit ? 'UPDATE_SESSION' : 'CREATE_SESSION');
+  closeGenericModal();
+  showSuccess('Đang lưu buổi học...');
+
+  var clientTxnId = 'TXN_' + Date.now();
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    if (isEdit) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          reconcileUpdate(clientTxnId, res);
+          showSuccess('Đã cập nhật buổi học thành công!');
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi cập nhật buổi học: ' + (err.message || err));
+        })
+        .updateSession(sessionId, sessionData);
+    } else {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          reconcileUpdate(clientTxnId, res);
+          showSuccess('Đã lên lịch buổi học thành công!');
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi tạo buổi học: ' + (err.message || err));
+        })
+        .createSession(sessionData);
+    }
+  } else {
+    queueMutation({
+      type: isEdit ? 'UPDATE_SESSION' : 'CREATE_SESSION',
+      id: sessionId,
+      data: sessionData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi điểm danh
+ */
+function handleAttendanceSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var classSel = document.getElementById('attendance-class-select');
+  var sessionSel = document.getElementById('attendance-session-select');
+  if (!classSel || !sessionSel) return;
+
+  var classId = classSel.value;
+  var sessionId = sessionSel.value;
+
+  if (!classId || !sessionId) {
+    showError('Vui lòng chọn cả Lớp học và Buổi học cần điểm danh.');
+    return;
+  }
+
+  var rows = document.querySelectorAll('#attendance-tbody tr');
+  var attendanceRecords = [];
+
+  rows.forEach(function(row) {
+    var studentId = row.dataset.studentId;
+    if (!studentId) return;
+
+    var statusEl = row.querySelector('.attendance-status-select');
+    var noteEl = row.querySelector('.attendance-note-input');
+    var feeCountedEl = row.querySelector('.attendance-fee-counted');
+
+    var existing = appState.attendance.find(function(a) {
+      return a.sessionId === sessionId && a.studentId === studentId;
+    });
+
+    var attRecord = {
+      attendanceId: existing ? existing.attendanceId : ('ATT' + Date.now() + '_' + studentId),
+      sessionId: sessionId,
+      classId: classId,
+      studentId: studentId,
+      status: statusEl ? statusEl.value : 'PRESENT',
+      note: noteEl ? noteEl.value.trim() : '',
+      feeCounted: feeCountedEl ? feeCountedEl.checked : true,
+      createdAt: existing ? existing.createdAt : new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: existing ? (existing.version + 1) : 1
+    };
+
+    attendanceRecords.push(attRecord);
+  });
+
+  if (attendanceRecords.length === 0) {
+    showError('Không có dữ liệu học sinh để lưu điểm danh.');
+    return;
+  }
+
+  showLoading(true);
+
+  // Cập nhật trạng thái bộ nhớ đệm
+  attendanceRecords.forEach(function(rec) {
+    optimisticUpdate(rec, 'SAVE_ATTENDANCE');
+  });
+
+  var clientTxnId = 'TXN_ATT_' + Date.now();
+
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(savedRecords) {
+        showLoading(false);
+        reconcileUpdate(clientTxnId, savedRecords);
+        showSuccess('Lưu bảng điểm danh thành công!');
+        renderAttendance();
+      })
+      .withFailureHandler(function(err) {
+        showLoading(false);
+        showError('Lỗi lưu điểm danh: ' + (err.message || err));
+      })
+      .saveAttendance(attendanceRecords);
+  } else {
+    showLoading(false);
+    queueMutation({
+      type: 'SAVE_ATTENDANCE',
+      data: attendanceRecords,
+      txnId: clientTxnId
+    });
+    showSuccess('Đã lưu ngoại tuyến (Offline). Sẽ tự động đồng bộ khi có mạng.');
+  }
+}
+
+/**
+ * Xử lý gửi form điểm số
+ */
+function handleScoreFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var scoreId = form.elements['scoreId'].value || ('SCR' + Date.now());
+  var studentId = form.elements['studentId'].value;
+  var classId = form.elements['classId'].value;
+  var scoreVal = parseFloat(form.elements['score'].value);
+  var scaleVal = parseInt(form.elements['scale'].value, 10) || 10;
+  var weightVal = parseFloat(form.elements['weight'].value) || 1.0;
+
+  if (!studentId || !classId || isNaN(scoreVal)) {
+    showError('Vui lòng chọn học sinh, lớp học và nhập điểm số hợp lệ.');
+    return;
+  }
+
+  var scoreRecord = {
+    scoreId: scoreId,
+    studentId: studentId,
+    classId: classId,
+    scoreType: form.elements['scoreType'].value || 'Kiểm tra 15p',
+    score: scoreVal,
+    scale: scaleVal,
+    weight: weightVal,
+    testDate: form.elements['testDate'].value || new Date().toISOString().slice(0, 10),
+    comment: form.elements['comment'].value.trim(),
+    fileUrl: form.elements['fileUrl'].value.trim(),
+    createdBy: appState.currentUser.email,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  optimisticUpdate(scoreRecord, 'SAVE_SCORE');
+  closeGenericModal();
+  showSuccess('Đang lưu điểm số...');
+
+  var clientTxnId = 'TXN_SCR_' + Date.now();
+
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(res) {
+        reconcileUpdate(clientTxnId, res);
+        showSuccess('Đã ghi nhận điểm số học sinh thành công!');
+        renderScores();
+      })
+      .withFailureHandler(function(err) {
+        showError('Lỗi lưu điểm số: ' + (err.message || err));
+      })
+      .saveScores([scoreRecord]);
+  } else {
+    queueMutation({
+      type: 'SAVE_SCORE',
+      data: [scoreRecord],
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi form học phí
+ */
+function handleFeeFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var feeId = form.elements['feeId'].value || ('FEE' + Date.now());
+  var studentId = form.elements['studentId'].value;
+  var classId = form.elements['classId'].value;
+  var period = form.elements['period'].value.trim();
+  var unitPrice = Number(form.elements['unitPrice'].value) || 0;
+  var sessionCount = parseInt(form.elements['sessionCount'].value, 10) || 0;
+  var subtotal = unitPrice * sessionCount;
+  var surcharge = Number(form.elements['surcharge'].value) || 0;
+  var discount = Number(form.elements['discount'].value) || 0;
+  var previousDebt = Number(form.elements['previousDebt'].value) || 0;
+  var total = subtotal + surcharge - discount + previousDebt;
+  var paid = Number(form.elements['paid'].value) || 0;
+  var balance = total - paid;
+  var status = balance <= 0 ? 'PAID' : (paid > 0 ? 'PARTIAL' : 'UNPAID');
+
+  if (!studentId || !classId || !period) {
+    showError('Vui lòng chọn học sinh, lớp và kỳ thu phí.');
+    return;
+  }
+
+  var feeData = {
+    feeId: feeId,
+    studentId: studentId,
+    classId: classId,
+    period: period,
+    feeType: form.elements['feeType'].value || 'TUITION',
+    sessionCount: sessionCount,
+    unitPrice: unitPrice,
+    subtotal: subtotal,
+    surcharge: surcharge,
+    discount: discount,
+    previousDebt: previousDebt,
+    total: total,
+    paid: paid,
+    balance: balance,
+    status: status,
+    dueDate: form.elements['dueDate'].value,
+    note: form.elements['note'].value.trim(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  optimisticUpdate(feeData, 'CREATE_FEE');
+  closeGenericModal();
+  showSuccess('Đang lưu học phí...');
+
+  var clientTxnId = 'TXN_FEE_' + Date.now();
+
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(res) {
+        reconcileUpdate(clientTxnId, res);
+        showSuccess('Đã lập khoản học phí thành công!');
+        renderFees();
+      })
+      .withFailureHandler(function(err) {
+        showError('Lỗi tạo khoản học phí: ' + (err.message || err));
+      })
+      .createFee(feeData);
+  } else {
+    queueMutation({
+      type: 'CREATE_FEE',
+      data: feeData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi form thanh toán học phí
+ */
+function handlePaymentFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var feeId = form.elements['feeId'].value;
+  var studentId = form.elements['studentId'].value;
+  var amount = Number(form.elements['amount'].value) || 0;
+  var method = form.elements['method'].value || 'CASH';
+  var transactionCode = form.elements['transactionCode'].value.trim();
+
+  if (!feeId || amount <= 0) {
+    showError('Vui lòng nhập số tiền thanh toán lớn hơn 0.');
+    return;
+  }
+
+  var paymentData = {
+    paymentId: 'PAY' + Date.now(),
+    feeId: feeId,
+    studentId: studentId,
+    amount: amount,
+    method: method,
+    paidAt: new Date().toISOString(),
+    transactionCode: transactionCode,
+    receiptUrl: '',
+    createdBy: appState.currentUser.email,
+    createdAt: new Date().toISOString(),
+    version: 1
+  };
+
+  optimisticUpdate(paymentData, 'RECORD_PAYMENT');
+  closeGenericModal();
+  showSuccess('Đang ghi nhận giao dịch thanh toán...');
+
+  var clientTxnId = 'TXN_PAY_' + Date.now();
+
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(res) {
+        reconcileUpdate(clientTxnId, res);
+        showSuccess('Đã ghi nhận thanh toán và cập nhật số dư!');
+        renderFees();
+      })
+      .withFailureHandler(function(err) {
+        showError('Lỗi ghi nhận thanh toán: ' + (err.message || err));
+      })
+      .recordPayment(paymentData);
+  } else {
+    queueMutation({
+      type: 'RECORD_PAYMENT',
+      data: paymentData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi form nhận xét học sinh
+ */
+function handleCommentFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var studentId = form.elements['studentId'].value;
+  var classId = form.elements['classId'].value;
+  var content = form.elements['content'].value.trim();
+
+  if (!studentId || !classId || !content) {
+    showError('Vui lòng chọn học sinh, lớp và nội dung nhận xét.');
+    return;
+  }
+
+  var commentData = {
+    commentId: 'CMT' + Date.now(),
+    studentId: studentId,
+    classId: classId,
+    sessionId: form.elements['sessionId'] ? form.elements['sessionId'].value : '',
+    type: form.elements['type'].value || 'MONTHLY',
+    content: content,
+    aiGenerated: form.elements['aiGenerated'] ? form.elements['aiGenerated'].checked : false,
+    visibility: form.elements['visibility'].value || 'PUBLIC',
+    createdBy: appState.currentUser.email,
+    createdAt: new Date().toISOString(),
+    version: 1
+  };
+
+  optimisticUpdate(commentData, 'CREATE_COMMENT');
+  closeGenericModal();
+  showSuccess('Đang lưu nhận xét...');
+
+  var clientTxnId = 'TXN_CMT_' + Date.now();
+
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(res) {
+        reconcileUpdate(clientTxnId, res);
+        showSuccess('Đã đăng nhận xét học sinh thành công!');
+        renderComments();
+      })
+      .withFailureHandler(function(err) {
+        showError('Lỗi lưu nhận xét: ' + (err.message || err));
+      })
+      .createComment(commentData);
+  } else {
+    queueMutation({
+      type: 'CREATE_COMMENT',
+      data: commentData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi form học liệu
+ */
+function handleMaterialFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var title = form.elements['title'].value.trim();
+  var url = form.elements['url'].value.trim();
+  var classId = form.elements['classId'].value;
+
+  if (!title || !url) {
+    showError('Vui lòng nhập tiêu đề tài liệu và đường dẫn liên kết.');
+    return;
+  }
+
+  var materialData = {
+    materialId: 'MAT' + Date.now(),
+    title: title,
+    type: form.elements['type'].value || 'DOCUMENT',
+    url: url,
+    classId: classId,
+    studentId: '',
+    topic: form.elements['topic'].value.trim(),
+    visibility: form.elements['visibility'].value || 'PUBLIC',
+    createdBy: appState.currentUser.email,
+    createdAt: new Date().toISOString()
+  };
+
+  optimisticUpdate(materialData, 'UPLOAD_MATERIAL');
+  closeGenericModal();
+  showSuccess('Đang lưu học liệu...');
+
+  var clientTxnId = 'TXN_MAT_' + Date.now();
+
+  if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function(res) {
+        reconcileUpdate(clientTxnId, res);
+        showSuccess('Đã thêm học liệu thành công!');
+        renderMaterials();
+      })
+      .withFailureHandler(function(err) {
+        showError('Lỗi lưu học liệu: ' + (err.message || err));
+      })
+      .uploadMaterial(materialData);
+  } else {
+    queueMutation({
+      type: 'UPLOAD_MATERIAL',
+      data: materialData,
+      txnId: clientTxnId
+    });
+  }
+}
+
+/**
+ * Xử lý gửi form bài tập
+ */
+function handleAssignmentFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var title = form.elements['title'].value.trim();
+  var classId = form.elements['classId'].value;
+
+  if (!title || !classId) {
+    showError('Vui lòng nhập tên bài tập và chọn lớp áp dụng.');
+    return;
+  }
+
+  var assignmentData = {
+    assignmentId: 'ASN' + Date.now(),
+    title: title,
+    description: form.elements['description'].value.trim(),
+    classId: classId,
+    studentId: '',
+    dueDate: form.elements['dueDate'].value,
+    status: 'ACTIVE',
+    createdBy: appState.currentUser.email,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  closeGenericModal();
+  showLoading(true);
+
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function() {
+        showLoading(false);
+        showSuccess('Đã giao bài tập mới thành công!');
+      })
+      .withFailureHandler(function(err) {
+        showLoading(false);
+        showError('Lỗi tạo bài tập: ' + (err.message || err));
+      })
+      .createAssignment(assignmentData);
+  } else {
+    showLoading(false);
+    showSuccess('Đã lưu bài tập mô phỏng.');
+  }
+}
+
+/**
+ * Xử lý gửi form nộp bài
+ */
+function handleSubmissionFormSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var form = document.getElementById('generic-modal-form');
+  if (!form) return;
+
+  var assignmentId = form.elements['assignmentId'].value;
+  var studentId = form.elements['studentId'].value;
+
+  var submissionData = {
+    submissionId: 'SUB' + Date.now(),
+    assignmentId: assignmentId,
+    studentId: studentId,
+    content: form.elements['content'].value.trim(),
+    fileUrl: form.elements['fileUrl'].value.trim(),
+    submittedAt: new Date().toISOString(),
+    status: 'SUBMITTED',
+    score: null,
+    feedback: '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    version: 1
+  };
+
+  closeGenericModal();
+  showLoading(true);
+
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(function() {
+        showLoading(false);
+        showSuccess('Đã gửi nộp bài tập thành công!');
+      })
+      .withFailureHandler(function(err) {
+        showLoading(false);
+        showError('Lỗi nộp bài: ' + (err.message || err));
+      })
+      .submitAssignment(submissionData);
+  } else {
+    showLoading(false);
+    showSuccess('Đã ghi nhận bài nộp giả lập.');
+  }
+}
+
+/**
+ * Xử lý tìm kiếm chung
+ */
+function handleSearch(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  if (appState.currentView === 'students-view') {
+    renderStudents();
+  } else if (appState.currentView === 'classes-view') {
+    renderClasses();
+  } else if (appState.currentView === 'schedule-view') {
+    renderSchedule();
+  }
+}
+
+/**
+ * Xử lý lọc dữ liệu
+ */
+function handleFilter(event) {
+  if (event && event.preventDefault) event.preventDefault();
+  handleSearch(event);
+  showSuccess('Đã áp dụng bộ lọc');
+}
+
+/**
+ * Xử lý xuất dữ liệu ra file Excel/CSV
+ */
+function handleExport(event) {
+  if (event && event.preventDefault) event.preventDefault();
+
+  var dataToExport = [];
+  var filename = 'Export_' + appState.currentView + '_' + new Date().toISOString().slice(0, 10) + '.csv';
+
+  if (appState.currentView === 'students-view') {
+    dataToExport = appState.students.map(function(s) {
+      return {
+        'Mã HS': s.code || s.studentId,
+        'Họ và Tên': s.fullName,
+        'Ngày sinh': s.dob || '',
+        'Giới tính': s.gender || '',
+        'Số điện thoại': s.phone || '',
+        'Phụ huynh': s.parentName || '',
+        'SĐT Phụ huynh': s.parentPhone || '',
+        'Trường học': s.school || '',
+        'Khối': s.grade || '',
+        'Trạng thái': s.status || ''
+      };
+    });
+  } else if (appState.currentView === 'fees-view') {
+    dataToExport = appState.fees.map(function(f) {
+      var std = appState.students.find(function(s) { return s.studentId === f.studentId; }) || {};
+      return {
+        'Học sinh': std.fullName || f.studentId,
+        'Kỳ học phí': f.period,
+        'Tổng tiền': f.total,
+        'Đã thanh toán': f.paid,
+        'Dư nợ': f.balance,
+        'Trạng thái': f.status
+      };
+    });
+  } else {
+    showSuccess('Đang trích xuất dữ liệu của bảng hiện tại...');
+    dataToExport = [{ 'ThongTin': 'Dữ liệu trích xuất từ EduClass AI', 'Ngay': new Date().toLocaleDateString() }];
+  }
+
+  if (dataToExport.length === 0) {
+    showError('Không có dữ liệu để xuất file.');
+    return;
+  }
+
+  // Chuyển sang CSV và tải xuống trình duyệt
+  var keys = Object.keys(dataToExport[0]);
+  var csvContent = '\uFEFF' + keys.join(',') + '\n';
+
+  dataToExport.forEach(function(row) {
+    var line = keys.map(function(k) {
+      var val = row[k] === null || row[k] === undefined ? '' : String(row[k]);
+      return '"' + val.replace(/"/g, '""') + '"';
+    }).join(',');
+    csvContent += line + '\n';
+  });
+
+  var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  var link = document.createElement('a');
+  var url = URL.createObjectURL(blob);
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showSuccess('Xuất file thành công: ' + filename);
+}
+
+/**
+ * Xử lý đăng xuất
+ */
+function handleLogout() {
+  showConfirmation('Bạn có chắc chắn muốn đăng xuất khỏi hệ thống?', function() {
+    showLoading(true);
+    // Xóa bộ nhớ tạm và chuyển trang đăng xuất Google
+    try {
+      localStorage.removeItem('educlass_mutation_queue');
+    } catch (e) {}
+    window.location.href = 'https://accounts.google.com/Logout';
+  });
+}
+
+/**
+ * Hiển thị/ẩn trạng thái đang tải (Loading Spinner)
+ */
+function showLoading(show) {
+  var indicator = document.getElementById('loading-indicator');
+  if (!indicator) return;
+  indicator.style.display = show ? 'flex' : 'none';
+}
+
+/**
+ * Hiển thị thông báo lỗi (Toast đỏ)
+ */
+function showError(message) {
+  var errorEl = document.getElementById('error-message');
+  if (!errorEl) {
+    alert(message);
+    return;
+  }
+  errorEl.textContent = message;
+  errorEl.style.display = 'block';
+  errorEl.classList.add('fade-in');
+  setTimeout(function() {
+    errorEl.style.display = 'none';
+  }, 4500);
+}
+
+/**
+ * Hiển thị thông báo thành công (Toast xanh)
+ */
+function showSuccess(message) {
+  var successEl = document.getElementById('success-message');
+  if (!successEl) {
+    console.log(message);
+    return;
+  }
+  successEl.textContent = message;
+  successEl.style.display = 'block';
+  successEl.classList.add('fade-in');
+  setTimeout(function() {
+    successEl.style.display = 'none';
+  }, 3500);
+}
+
+/**
+ * Hiển thị hộp thoại xác nhận (Modal Confirmation)
+ */
+function showConfirmation(message, callback) {
+  var dialog = document.getElementById('confirmation-dialog');
+  var msgEl = document.getElementById('confirm-dialog-msg');
+  if (!dialog) {
+    if (confirm(message)) {
+      if (typeof callback === 'function') callback();
+    }
+    return;
+  }
+
+  if (msgEl) msgEl.textContent = message;
+  appState.confirmCallback = callback;
+  dialog.style.display = 'flex';
+
+  var btnConfirm = dialog.querySelector('.btn-confirm-action');
+  if (btnConfirm) {
+    btnConfirm.onclick = function() {
+      dialog.style.display = 'none';
+      if (typeof appState.confirmCallback === 'function') {
+        appState.confirmCallback();
+        appState.confirmCallback = null;
+      }
+    };
+  }
+
+  var btnCancelDialog = dialog.querySelector('.btn-cancel-dialog');
+  if (btnCancelDialog) {
+    btnCancelDialog.onclick = function() {
+      dialog.style.display = 'none';
+      appState.confirmCallback = null;
+    };
+  }
+}
+
+/**
+ * Cập nhật tối ưu (Optimistic Update) giao diện ngay tức thì
+ */
+function optimisticUpdate(record, action) {
+  switch (action) {
+    case 'CREATE_STUDENT':
+      appState.students.unshift(record);
+      renderStudents();
+      renderDashboard();
+      break;
+
+    case 'UPDATE_STUDENT':
+      var idx = appState.students.findIndex(function(s) { return s.studentId === record.studentId; });
+      if (idx !== -1) {
+        appState.students[idx] = record;
+        renderStudents();
+      }
+      break;
+
+    case 'DELETE_STUDENT':
+      appState.students = appState.students.filter(function(s) { return s.studentId !== record.studentId; });
+      renderStudents();
+      renderDashboard();
+      break;
+
+    case 'CREATE_CLASS':
+      appState.classes.unshift(record);
+      renderClasses();
+      renderDashboard();
+      break;
+
+    case 'UPDATE_CLASS':
+      var cIdx = appState.classes.findIndex(function(c) { return c.classId === record.classId; });
+      if (cIdx !== -1) {
+        appState.classes[cIdx] = record;
+        renderClasses();
+      }
+      break;
+
+    case 'DELETE_CLASS':
+      appState.classes = appState.classes.filter(function(c) { return c.classId !== record.classId; });
+      renderClasses();
+      renderDashboard();
+      break;
+
+    case 'CREATE_SESSION':
+      appState.sessions.unshift(record);
+      renderSchedule();
+      renderDashboard();
+      break;
+
+    case 'UPDATE_SESSION':
+      var sIdx = appState.sessions.findIndex(function(s) { return s.sessionId === record.sessionId; });
+      if (sIdx !== -1) {
+        appState.sessions[sIdx] = record;
+        renderSchedule();
+      }
+      break;
+
+    case 'DELETE_SESSION':
+      appState.sessions = appState.sessions.filter(function(s) { return s.sessionId !== record.sessionId; });
+      renderSchedule();
+      renderDashboard();
+      break;
+
+    case 'SAVE_ATTENDANCE':
+      var attIdx = appState.attendance.findIndex(function(a) {
+        return a.sessionId === record.sessionId && a.studentId === record.studentId;
+      });
+      if (attIdx !== -1) {
+        appState.attendance[attIdx] = record;
+      } else {
+        appState.attendance.push(record);
+      }
+      break;
+
+    case 'SAVE_SCORE':
+      var scIdx = appState.scores.findIndex(function(sc) { return sc.scoreId === record.scoreId; });
+      if (scIdx !== -1) {
+        appState.scores[scIdx] = record;
+      } else {
+        appState.scores.unshift(record);
+      }
+      renderScores();
+      break;
+
+    case 'CREATE_FEE':
+      appState.fees.unshift(record);
+      renderFees();
+      renderDashboard();
+      break;
+
+    case 'RECORD_PAYMENT':
+      var feeTarget = appState.fees.find(function(f) { return f.feeId === record.feeId; });
+      if (feeTarget) {
+        feeTarget.paid = (Number(feeTarget.paid) || 0) + Number(record.amount);
+        feeTarget.balance = (Number(feeTarget.total) || 0) - feeTarget.paid;
+        feeTarget.status = feeTarget.balance <= 0 ? 'PAID' : 'PARTIAL';
+      }
+      renderFees();
+      renderDashboard();
+      break;
+
+    case 'UPLOAD_MATERIAL':
+      appState.materials.unshift(record);
+      renderMaterials();
+      break;
+
+    case 'CREATE_COMMENT':
+      appState.comments.unshift(record);
+      renderComments();
+      break;
+  }
+}
+
+/**
+ * Đồng bộ xác nhận cập nhật từ máy chủ (Reconcile Update)
+ */
+function reconcileUpdate(clientTxnId, serverResponse) {
+  // Loại bỏ mutation tương ứng nếu nằm trong hàng đợi
+  appState.mutationQueue = appState.mutationQueue.filter(function(m) {
+    return m.txnId !== clientTxnId;
+  });
+  persistMutationQueue();
+
+  // Đồng bộ lại đối tượng thực tế nếu server trả về version hoặc id mới
+  if (serverResponse && typeof serverResponse === 'object') {
+    if (serverResponse.studentId) {
+      var sIdx = appState.students.findIndex(function(s) { return s.studentId === serverResponse.studentId; });
+      if (sIdx !== -1) appState.students[sIdx] = serverResponse;
+    } else if (serverResponse.classId && !serverResponse.sessionId) {
+      var cIdx = appState.classes.findIndex(function(c) { return c.classId === serverResponse.classId; });
+      if (cIdx !== -1) appState.classes[cIdx] = serverResponse;
+    } else if (serverResponse.sessionId) {
+      var sesIdx = appState.sessions.findIndex(function(s) { return s.sessionId === serverResponse.sessionId; });
+      if (sesIdx !== -1) appState.sessions[sesIdx] = serverResponse;
+    }
+  }
+}
+
+/**
+ * Xử lý khi mất kết nối mạng (Offline)
+ */
+function handleOffline() {
+  appState.isOnline = false;
+  showError('Đã mất kết nối Internet! Hệ thống đang hoạt động ở chế độ ngoại tuyến (Offline). Các thay đổi sẽ được lưu đệm.');
+}
+
+/**
+ * Xử lý khi có lại kết nối mạng (Online)
+ */
+function handleOnline() {
+  appState.isOnline = true;
+  showSuccess('Đã kết nối Internet trở lại! Bắt đầu đồng bộ dữ liệu đệm...');
+  processQueue();
+}
+
+/**
+ * Đưa thao tác thay đổi vào hàng đợi ngoại tuyến
+ */
+function queueMutation(mutation) {
+  appState.mutationQueue.push(mutation);
+  persistMutationQueue();
+}
+
+/**
+ * Lưu trữ hàng đợi vào LocalStorage
+ */
+function persistMutationQueue() {
+  try {
+    localStorage.setItem('educlass_mutation_queue', JSON.stringify(appState.mutationQueue));
+  } catch (err) {
+    console.warn('Không thể lưu mutationQueue vào localStorage:', err);
+  }
+}
+
+/**
+ * Xử lý và đẩy hàng đợi mutation lên máy chủ
+ */
+function processQueue() {
+  if (!appState.isOnline || appState.mutationQueue.length === 0) return;
+  if (typeof google === 'undefined' || !google.script || !google.script.run) return;
+
+  var currentMut = appState.mutationQueue[0];
+  showLoading(true);
+
+  var onComplete = function(res) {
+    reconcileUpdate(currentMut.txnId, res);
+    showLoading(false);
+    // Xử lý mục kế tiếp
+    processQueue();
+  };
+
+  var onError = function(err) {
+    showLoading(false);
+    showError('Lỗi đồng bộ ngoại tuyến: ' + (err.message || err));
+    // Dời lại hàng đợi để thử lại sau
+  };
+
+  switch (currentMut.type) {
+    case 'CREATE_STUDENT':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).createStudent(currentMut.data);
+      break;
+    case 'UPDATE_STUDENT':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).updateStudent(currentMut.id, currentMut.data);
+      break;
+    case 'DELETE_STUDENT':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).deleteStudent(currentMut.id);
+      break;
+    case 'CREATE_CLASS':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).createClass(currentMut.data);
+      break;
+    case 'UPDATE_CLASS':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).updateClass(currentMut.id, currentMut.data);
+      break;
+    case 'DELETE_CLASS':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).deleteClass(currentMut.id);
+      break;
+    case 'CREATE_SESSION':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).createSession(currentMut.data);
+      break;
+    case 'UPDATE_SESSION':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).updateSession(currentMut.id, currentMut.data);
+      break;
+    case 'DELETE_SESSION':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).deleteSession(currentMut.id);
+      break;
+    case 'SAVE_ATTENDANCE':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).saveAttendance(currentMut.data);
+      break;
+    case 'SAVE_SCORE':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).saveScores(currentMut.data);
+      break;
+    case 'CREATE_FEE':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).createFee(currentMut.data);
+      break;
+    case 'RECORD_PAYMENT':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).recordPayment(currentMut.data);
+      break;
+    case 'UPLOAD_MATERIAL':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).uploadMaterial(currentMut.data);
+      break;
+    case 'CREATE_COMMENT':
+      google.script.run.withSuccessHandler(onComplete).withFailureHandler(onError).createComment(currentMut.data);
+      break;
+    default:
+      appState.mutationQueue.shift();
+      persistMutationQueue();
+      showLoading(false);
+      processQueue();
+      break;
+  }
+}
+
+/* ==========================================================================
+   CÁC HÀM TIỆN ÍCH MODAL VÀ HÀNH ĐỘNG DỮ LIỆU CỤ THỂ
+   ========================================================================== */
+
+function openGenericModal(title, bodyHtml, onSaveAction) {
+  var modal = document.getElementById('generic-modal');
+  var titleEl = document.getElementById('generic-modal-title');
+  var bodyEl = document.getElementById('generic-modal-body');
+
+  if (!modal || !titleEl || !bodyEl) return;
+
+  titleEl.textContent = title;
+  bodyEl.innerHTML = bodyHtml;
+  appState.activeModalAction = onSaveAction;
+  modal.style.display = 'flex';
+}
+
+function closeGenericModal() {
+  var modal = document.getElementById('generic-modal');
+  if (modal) modal.style.display = 'none';
+  appState.activeModalAction = null;
+}
+
+function openStudentModal(studentId) {
+  var s = studentId ? appState.students.find(function(it) { return it.studentId === studentId; }) : null;
+  var isEdit = !!s;
+
+  var html = '<form id="generic-modal-form">' +
+    '<input type="hidden" name="studentId" value="' + (s ? s.studentId : '') + '">' +
+    '<input type="hidden" name="isEdit" value="' + (isEdit ? '1' : '') + '">' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Mã Học Sinh</label>' +
+        '<input type="text" class="form-control" name="code" value="' + escapeHtml(s ? s.code || '' : 'HS' + Math.floor(100 + Math.random()*900)) + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Họ và Tên (*)</label>' +
+        '<input type="text" class="form-control" name="fullName" required value="' + escapeHtml(s ? s.fullName || '' : '') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Ngày Sinh</label>' +
+        '<input type="date" class="form-control" name="dob" value="' + (s && s.dob ? s.dob.slice(0, 10) : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Giới Tính</label>' +
+        '<select class="form-control" name="gender">' +
+          '<option value="Nam"' + (s && s.gender === 'Nam' ? ' selected' : '') + '>Nam</option>' +
+          '<option value="Nữ"' + (s && s.gender === 'Nữ' ? ' selected' : '') + '>Nữ</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Số Điện Thoại</label>' +
+        '<input type="text" class="form-control" name="phone" value="' + escapeHtml(s ? s.phone || '' : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Email Học Sinh</label>' +
+        '<input type="email" class="form-control" name="email" value="' + escapeHtml(s ? s.email || '' : '') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Tên Phụ Huynh</label>' +
+        '<input type="text" class="form-control" name="parentName" value="' + escapeHtml(s ? s.parentName || '' : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>SĐT Phụ Huynh</label>' +
+        '<input type="text" class="form-control" name="parentPhone" value="' + escapeHtml(s ? s.parentPhone || '' : '') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Email Phụ Huynh</label>' +
+        '<input type="email" class="form-control" name="parentEmail" value="' + escapeHtml(s ? s.parentEmail || '' : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-3">' +
+        '<label>Trường Học</label>' +
+        '<input type="text" class="form-control" name="school" value="' + escapeHtml(s ? s.school || '' : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-3">' +
+        '<label>Khối Lớp</label>' +
+        '<input type="text" class="form-control" name="grade" value="' + escapeHtml(s ? s.grade || '' : '') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Trạng Thái</label>' +
+        '<select class="form-control" name="status">' +
+          '<option value="ACTIVE"' + (s && s.status === 'ACTIVE' ? ' selected' : '') + '>Đang theo học (ACTIVE)</option>' +
+          '<option value="INACTIVE"' + (s && s.status === 'INACTIVE' ? ' selected' : '') + '>Nghỉ học (INACTIVE)</option>' +
+        '</select>' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Ngày Bắt Đầu</label>' +
+        '<input type="date" class="form-control" name="startDate" value="' + (s && s.startDate ? s.startDate.slice(0, 10) : '') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Ghi Chú Học Sinh</label>' +
+      '<textarea class="form-control" name="note" rows="2">' + escapeHtml(s ? s.note || '' : '') + '</textarea>' +
+    '</div>' +
+  '</form>';
+
+  openGenericModal(isEdit ? 'Cập Nhật Học Sinh' : 'Thêm Học Sinh Mới', html, handleStudentFormSubmit);
+}
+
+function deleteStudentAction(studentId) {
+  var s = appState.students.find(function(it) { return it.studentId === studentId; });
+  var name = s ? s.fullName : studentId;
+  showConfirmation('Bạn có chắc muốn xóa học sinh "' + name + '"?', function() {
+    optimisticUpdate({ studentId: studentId }, 'DELETE_STUDENT');
+    var clientTxnId = 'TXN_DEL_STD_' + Date.now();
+    if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(function() {
+          showSuccess('Đã xóa học sinh thành công!');
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi xóa học sinh: ' + (err.message || err));
+        })
+        .deleteStudent(studentId);
+    } else {
+      queueMutation({ type: 'DELETE_STUDENT', id: studentId, txnId: clientTxnId });
+      showSuccess('Đã ghi nhận xóa ngoại tuyến.');
+    }
+  });
+}
+
+function openClassModal(classId) {
+  var c = classId ? appState.classes.find(function(it) { return it.classId === classId; }) : null;
+  var isEdit = !!c;
+
+  var html = '<form id="generic-modal-form">' +
+    '<input type="hidden" name="classId" value="' + (c ? c.classId : '') + '">' +
+    '<input type="hidden" name="isEdit" value="' + (isEdit ? '1' : '') + '">' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-8">' +
+        '<label>Tên Lớp Học (*)</label>' +
+        '<input type="text" class="form-control" name="className" required value="' + escapeHtml(c ? c.className || '' : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Môn Học (*)</label>' +
+        '<input type="text" class="form-control" name="subject" required value="' + escapeHtml(c ? c.subject || '' : 'Toán') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-4">' +
+        '<label>Khối / Trình Độ</label>' +
+        '<input type="text" class="form-control" name="level" value="' + escapeHtml(c ? c.level || '' : 'Lớp 9') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Mã Giáo Viên</label>' +
+        '<input type="text" class="form-control" name="teacherId" value="' + escapeHtml(c ? c.teacherId || '' : 'TCH001') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Phòng Học</label>' +
+        '<input type="text" class="form-control" name="room" value="' + escapeHtml(c ? c.room || '' : 'Phòng 101') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Hình Thức Học Phí</label>' +
+        '<select class="form-control" name="tuitionType">' +
+          '<option value="SESSION"' + (c && c.tuitionType === 'SESSION' ? ' selected' : '') + '>Theo buổi học</option>' +
+          '<option value="MONTHLY"' + (c && c.tuitionType === 'MONTHLY' ? ' selected' : '') + '>Theo tháng trọn gói</option>' +
+        '</select>' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Đơn Giá Chuẩn (VNĐ)</label>' +
+        '<input type="number" class="form-control" name="defaultFee" value="' + (c ? c.defaultFee || 0 : 200000) + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-4">' +
+        '<label>Màu Đại Diện</label>' +
+        '<input type="color" class="form-control" name="color" value="' + (c && c.color ? c.color : '#3b82f6') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Ngày Bắt Đầu</label>' +
+        '<input type="date" class="form-control" name="startDate" value="' + (c && c.startDate ? c.startDate.slice(0, 10) : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Trạng Thái</label>' +
+        '<select class="form-control" name="status">' +
+          '<option value="ACTIVE"' + (c && c.status === 'ACTIVE' ? ' selected' : '') + '>Đang mở (ACTIVE)</option>' +
+          '<option value="CLOSED"' + (c && c.status === 'CLOSED' ? ' selected' : '') + '>Đã kết thúc (CLOSED)</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Cấu hình lịch lặp (JSON)</label>' +
+      '<input type="text" class="form-control" name="scheduleJson" value="' + escapeHtml(c ? c.scheduleJson || '' : '{"days":[2,4,6],"time":"18:00-20:00"}') + '">' +
+    '</div>' +
+  '</form>';
+
+  openGenericModal(isEdit ? 'Cập Nhật Lớp Học' : 'Tạo Lớp Học Mới', html, handleClassFormSubmit);
+}
+
+function deleteClassAction(classId) {
+  var c = appState.classes.find(function(it) { return it.classId === classId; });
+  var name = c ? c.className : classId;
+  showConfirmation('Bạn có chắc muốn xóa lớp học "' + name + '"?', function() {
+    optimisticUpdate({ classId: classId }, 'DELETE_CLASS');
+    var clientTxnId = 'TXN_DEL_CLS_' + Date.now();
+    if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(function() {
+          showSuccess('Đã xóa lớp học thành công!');
+          populateDropdowns();
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi xóa lớp học: ' + (err.message || err));
+        })
+        .deleteClass(classId);
+    } else {
+      queueMutation({ type: 'DELETE_CLASS', id: classId, txnId: clientTxnId });
+      showSuccess('Đã ghi nhận xóa lớp ngoại tuyến.');
+    }
+  });
+}
+
+function openSessionModal(sessionId) {
+  var s = sessionId ? appState.sessions.find(function(it) { return it.sessionId === sessionId; }) : null;
+  var isEdit = !!s;
+
+  var classOpts = appState.classes.map(function(c) {
+    return '<option value="' + c.classId + '"' + (s && s.classId === c.classId ? ' selected' : '') + '>' + escapeHtml(c.className) + '</option>';
+  }).join('');
+
+  var html = '<form id="generic-modal-form">' +
+    '<input type="hidden" name="sessionId" value="' + (s ? s.sessionId : '') + '">' +
+    '<input type="hidden" name="isEdit" value="' + (isEdit ? '1' : '') + '">' +
+    '<div class="form-group">' +
+      '<label>Lớp Học (*)</label>' +
+      '<select class="form-control" name="classId" required>' + classOpts + '</select>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Thời Gian Bắt Đầu (*)</label>' +
+        '<input type="datetime-local" class="form-control" name="startTime" required value="' + (s && s.startTime ? s.startTime.slice(0, 16) : '') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Thời Gian Kết Thúc</label>' +
+        '<input type="datetime-local" class="form-control" name="endTime" value="' + (s && s.endTime ? s.endTime.slice(0, 16) : '') + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Thời Lượng (Phút)</label>' +
+        '<input type="number" class="form-control" name="duration" value="' + (s ? s.duration || 90 : 90) + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Trạng Thái</label>' +
+        '<select class="form-control" name="status">' +
+          '<option value="SCHEDULED"' + (s && s.status === 'SCHEDULED' ? ' selected' : '') + '>Đã lên lịch (SCHEDULED)</option>' +
+          '<option value="COMPLETED"' + (s && s.status === 'COMPLETED' ? ' selected' : '') + '>Hoàn thành (COMPLETED)</option>' +
+          '<option value="CANCELLED"' + (s && s.status === 'CANCELLED' ? ' selected' : '') + '>Đã hủy (CANCELLED)</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Chủ Đề Buổi Học</label>' +
+      '<input type="text" class="form-control" name="topic" value="' + escapeHtml(s ? s.topic || '' : '') + '">' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Nội Dung Giảng Dạy</label>' +
+      '<textarea class="form-control" name="content" rows="2">' + escapeHtml(s ? s.content || '' : '') + '</textarea>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Bài Tập Về Nhà</label>' +
+      '<textarea class="form-control" name="homework" rows="2">' + escapeHtml(s ? s.homework || '' : '') + '</textarea>' +
+    '</div>' +
+  '</form>';
+
+  openGenericModal(isEdit ? 'Cập Nhật Buổi Học' : 'Lên Lịch Buổi Học Mới', html, handleSessionFormSubmit);
+}
+
+function deleteSessionAction(sessionId) {
+  showConfirmation('Bạn có chắc muốn xóa buổi học này?', function() {
+    optimisticUpdate({ sessionId: sessionId }, 'DELETE_SESSION');
+    var clientTxnId = 'TXN_DEL_SES_' + Date.now();
+    if (appState.isOnline && typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(function() {
+          showSuccess('Đã xóa buổi học thành công!');
+        })
+        .withFailureHandler(function(err) {
+          showError('Lỗi xóa buổi học: ' + (err.message || err));
+        })
+        .deleteSession(sessionId);
+    } else {
+      queueMutation({ type: 'DELETE_SESSION', id: sessionId, txnId: clientTxnId });
+      showSuccess('Đã ghi nhận xóa buổi học ngoại tuyến.');
+    }
+  });
+}
+
+function openScoreModal(scoreId) {
+  var sc = scoreId ? appState.scores.find(function(it) { return it.scoreId === scoreId; }) : null;
+
+  var stdOpts = appState.students.map(function(s) {
+    return '<option value="' + s.studentId + '"' + (sc && sc.studentId === s.studentId ? ' selected' : '') + '>' + escapeHtml(s.fullName) + ' (' + escapeHtml(s.code || s.studentId) + ')</option>';
+  }).join('');
+
+  var clsOpts = appState.classes.map(function(c) {
+    return '<option value="' + c.classId + '"' + (sc && sc.classId === c.classId ? ' selected' : '') + '>' + escapeHtml(c.className) + '</option>';
+  }).join('');
+
+  var html = '<form id="generic-modal-form">' +
+    '<input type="hidden" name="scoreId" value="' + (sc ? sc.scoreId : '') + '">' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Học Sinh (*)</label>' +
+        '<select class="form-control" name="studentId" required>' + stdOpts + '</select>' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Lớp Học (*)</label>' +
+        '<select class="form-control" name="classId" required>' + clsOpts + '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-4">' +
+        '<label>Loại Điểm</label>' +
+        '<input type="text" class="form-control" name="scoreType" value="' + escapeHtml(sc ? sc.scoreType : 'Kiểm tra 15p') + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Điểm Số (*)</label>' +
+        '<input type="number" step="0.1" class="form-control" name="score" required value="' + (sc ? sc.score : 8) + '">' +
+      '</div>' +
+      '<div class="form-group col-md-4">' +
+        '<label>Thang Điểm</label>' +
+        '<input type="number" class="form-control" name="scale" value="' + (sc ? sc.scale : 10) + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-row">' +
+      '<div class="form-group col-md-6">' +
+        '<label>Hệ Số Điểm</label>' +
+        '<input type="number" step="0.1" class="form-control" name="weight" value="' + (sc ? sc.weight : 1.0) + '">' +
+      '</div>' +
+      '<div class="form-group col-md-6">' +
+        '<label>Ngày Kiểm Tra</label>' +
+        '<input type="date" class="form-control" name="testDate" value="' + (sc && sc.testDate ? sc.testDate.slice(0, 10) : new Date().toISOString().slice(0, 10)) + '">' +
+      '</div>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Nhận Xét Điểm Số</label>' +
+      '<textarea class="form-control" name="comment" rows="2">' + escapeHtml(sc ? sc.comment || '' : '') + '</textarea>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>File Đề / Bài Làm (URL)</label>' +
+      '<input type="url" class="form-control" name="fileUrl" value="' + escapeHtml(sc ? sc.fileUrl || '' : '') + '">' +
+    '</div>' +
+  '</form>';
+
+  openGenericModal(sc ? 'Cập Nhật Điểm Số' : 'Nhập Điểm Học Sinh', html, handleScoreFormSubmit);
+}
+
+function openPaymentModal(feeId) {
+  var fee = appState.fees.find(function(f) { return f.feeId === feeId; });
+  if (!fee) return;
+
+  var std = appState.students.find(function(s) { return s.studentId === fee.studentId; }) || {};
+
+  var html = '<form id="generic-modal-form">' +
+    '<input type="hidden" name="feeId" value="' + fee.feeId + '">' +
+    '<input type="hidden" name="studentId" value="' + fee.studentId + '">' +
+    '<div class="alert alert-info py-2">' +
+      'Học sinh: <strong>' + escapeHtml(std.fullName || fee.studentId) + '</strong><br>' +
+      'Số tiền còn thiếu: <strong class="text-danger">' + formatVND(fee.balance || 0) + '</strong>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Số Tiền Thu (VNĐ) (*)</label>' +
+      '<input type="number" class="form-control" name="amount" required value="' + (fee.balance || 0) + '">' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Phương Thức Thanh Toán</label>' +
+      '<select class="form-control" name="method">' +
+        '<option value="CASH">Tiền mặt</option>' +
+        '<option value="BANK_TRANSFER">Chuyển khoản ngân hàng</option>' +
+        '<option value="ONLINE">Cổng thanh toán / Momo</option>' +
+      '</select>' +
+    '</div>' +
+    '<div class="form-group">' +
+      '<label>Mã Giao Dịch (Nếu CK)</label>' +
+      '<input type="text" class="form-control" name="transactionCode" placeholder="VD: FT24090123...">' +
+    '</div>' +
+  '</form>';
+
+  openGenericModal('Ghi Nhận Thanh Toán Học Phí', html, handlePaymentFormSubmit);
+}
+
+// Hàm hỗ trợ format tiền tệ VNĐ
+function formatVND(num) {
+  var val = Number(num) || 0;
+  return val.toLocaleString('vi-VN') + ' đ';
+}
+
+// Hàm định dạng ngày giờ hiển thị
+function formatDisplayDateTime(isoStr) {
+  if (!isoStr) return '---';
+  var d = new Date(isoStr);
+  if (isNaN(d.getTime())) return isoStr;
+  var day = ('0' + d.getDate()).slice(-2);
+  var mon = ('0' + (d.getMonth() + 1)).slice(-2);
+  var yr = d.getFullYear();
+  var hr = ('0' + d.getHours()).slice(-2);
+  var min = ('0' + d.getMinutes()).slice(-2);
+  return day + '/' + mon + '/' + yr + ' ' + hr + ':' + min;
+}
+
+// Hàm chống tấn công XSS an toàn
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+</script>

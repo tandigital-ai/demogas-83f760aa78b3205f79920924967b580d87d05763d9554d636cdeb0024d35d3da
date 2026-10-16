@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<!-- AI-ARCHITECT-BANNER
+Tác giả: TDA
+Liên hệ: 0986509106
+TDA — Think Daily. Act AI
+© 2026
+-->
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EduClass AI - Nền tảng quản lý lớp học thông minh</title>
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <div id="app-container" class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">🎓</div>
+        <div class="brand-text">
+          <span class="brand-title">EduClass AI</span>
+          <span class="brand-subtitle">Smart Class Platform</span>
+        </div>
+      </div>
+
+      <nav id="main-nav" class="nav-menu">
+        <a id="dashboard-link" href="#" class="nav-item active" onclick="showView('dashboard-view'); return false;">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a id="students-link" href="#" class="nav-item" onclick="showView('students-view'); return false;">
+          <span class="nav-icon">👨‍🎓</span>
+          <span class="nav-label">Học sinh</span>
+        </a>
+        <a id="classes-link" href="#" class="nav-item" onclick="showView('classes-view'); return false;">
+          <span class="nav-icon">🏫</span>
+          <span class="nav-label">Lớp học</span>
+        </a>
+        <a id="schedule-link" href="#" class="nav-item" onclick="showView('schedule-view'); return false;">
+          <span class="nav-icon">📅</span>
+          <span class="nav-label">Lịch dạy</span>
+        </a>
+        <a id="attendance-link" href="#" class="nav-item" onclick="showView('attendance-view'); return false;">
+          <span class="nav-icon">✅</span>
+          <span class="nav-label">Điểm danh</span>
+        </a>
+        <a id="scores-link" href="#" class="nav-item" onclick="showView('scores-view'); return false;">
+          <span class="nav-icon">📝</span>
+          <span class="nav-label">Điểm số</span>
+        </a>
+        <a id="fees-link" href="#" class="nav-item" onclick="showView('fees-view'); return false;">
+          <span class="nav-icon">💳</span>
+          <span class="nav-label">Học phí</span>
+        </a>
+        <a id="materials-link" href="#" class="nav-item" onclick="showView('materials-view'); return false;">
+          <span class="nav-icon">📚</span>
+          <span class="nav-label">Học liệu</span>
+        </a>
+        <a id="comments-link" href="#" class="nav-item" onclick="showView('comments-view'); return false;">
+          <span class="nav-icon">💬</span>
+          <span class="nav-label">Nhận xét</span>
+        </a>
+        <a id="reports-link" href="#" class="nav-item" onclick="showView('reports-view'); return false;">
+          <span class="nav-icon">📈</span>
+          <span class="nav-label">Báo cáo</span>
+        </a>
+        <a id="ai-assistant-link" href="#" class="nav-item nav-item-ai" onclick="showView('ai-assistant-view'); return false;">
+          <span class="nav-icon">🤖</span>
+          <span class="nav-label">AI Assistant</span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-wrapper">
+      
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="mobile-menu-toggle" class="btn-icon mobile-only" aria-label="Toggle Navigation">
+            ☰
+          </button>
+          <h2 id="view-title" class="page-title">Tổng quan hệ thống</h2>
+        </div>
+
+        <div id="user-menu" class="user-profile">
+          <div class="user-avatar">👤</div>
+          <div class="user-info">
+            <span id="user-email" class="user-email">loading...</span>
+            <span class="user-role">Giáo viên</span>
+          </div>
+          <a id="logout-link" href="#" class="logout-btn" onclick="handleLogout(); return false;" title="Đăng xuất">
+            🚪
+          </a>
+          <button id="btn-logout" class="btn btn-outline btn-sm" onclick="handleLogout();" style="display:none;">Đăng xuất</button>
+        </div>
+      </header>
+
+      <!-- Content Views Container -->
+      <div id="content-container" class="content-body">
+
+        <!-- DASHBOARD VIEW -->
+        <div id="dashboard-view" class="view-panel active">
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-icon bg-primary">👨‍🎓</div>
+              <div class="stat-details">
+                <span class="stat-label">Tổng học sinh</span>
+                <span id="dash-total-students" class="stat-value">0</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon bg-success">🏫</div>
+              <div class="stat-details">
+                <span class="stat-label">Lớp đang hoạt động</span>
+                <span id="dash-active-classes" class="stat-value">0</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon bg-warning">📅</div>
+              <div class="stat-details">
+                <span class="stat-label">Buổi học hôm nay</span>
+                <span id="dash-today-sessions" class="stat-value">0</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon bg-info">💳</div>
+              <div class="stat-details">
+                <span class="stat-label">Học phí cần thu</span>
+                <span id="dash-pending-fees" class="stat-value">0 ₫</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dashboard-sections">
+            <div class="card card-table">
+              <div class="card-header">
+                <h3>📅 Lịch dạy hôm nay</h3>
+                <button class="btn btn-sm btn-outline" onclick="renderSchedule(); showView('schedule-view');">Xem tất cả</button>
+              </div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Thời gian</th>
+                        <th>Lớp học</th>
+                        <th>Chủ đề</th>
+                        <th>Phòng</th>
+                        <th>Trạng thái</th>
+                        <th>Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody id="dash-schedule-tbody">
+                      <tr>
+                        <td colspan="6" class="text-center empty-state">Chưa có lịch dạy hôm nay</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>⚡ Thao tác nhanh</h3>
+              </div>
+              <div class="card-body quick-actions-grid">
+                <button class="btn btn-primary" onclick="showView('attendance-view');">✅ Điểm danh ngay</button>
+                <button class="btn btn-secondary" onclick="showView('scores-view');">📝 Nhập điểm số</button>
+                <button class="btn btn-success" onclick="showView('fees-view');">💳 Ghi nhận thu phí</button>
+                <button class="btn btn-ai" onclick="showView('ai-assistant-view');">🤖 Tạo nhận xét AI</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STUDENTS VIEW -->
+        <div id="students-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <input type="text" id="student-search-input" class="form-control" placeholder="Tìm theo tên, mã, SĐT...">
+              <button id="btn-search" class="btn btn-outline" onclick="handleSearch(event);">🔍 Tìm kiếm</button>
+              <button id="btn-filter" class="btn btn-outline" onclick="handleFilter(event);">🌪️ Lọc</button>
+            </div>
+            <div class="toolbar-right">
+              <button id="btn-export" class="btn btn-outline" onclick="handleExport(event);">📥 Xuất file</button>
+              <button class="btn btn-primary" onclick="openStudentModal();">➕ Thêm học sinh</button>
+            </div>
+          </div>
+
+          <div class="card card-table">
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Mã HS</th>
+                      <th>Họ và tên</th>
+                      <th>Ngày sinh</th>
+                      <th>Lớp / Trọng số</th>
+                      <th>SĐT Học sinh</th>
+                      <th>Phụ huynh</th>
+                      <th>Trạng thái</th>
+                      <th>Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody id="students-tbody">
+                    <tr>
+                      <td colspan="8" class="text-center empty-state">Đang tải danh sách học sinh...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CLASSES VIEW -->
+        <div id="classes-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <input type="text" id="class-search-input" class="form-control" placeholder="Tìm tên lớp, môn học...">
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-primary" onclick="openClassModal();">➕ Tạo lớp học mới</button>
+            </div>
+          </div>
+
+          <div id="classes-grid" class="cards-grid">
+            <!-- Classes will be dynamically rendered here -->
+          </div>
+        </div>
+
+        <!-- SCHEDULE VIEW -->
+        <div id="schedule-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <select id="schedule-class-filter" class="form-control" onchange="renderSchedule();">
+                <option value="">Tất cả lớp học</option>
+              </select>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-primary" onclick="openSessionModal();">➕ Tạo buổi học</button>
+            </div>
+          </div>
+
+          <div class="card card-table">
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Thời gian</th>
+                      <th>Lớp</th>
+                      <th>Thời lượng</th>
+                      <th>Chủ đề</th>
+                      <th>Nội dung / Bài tập</th>
+                      <th>Trạng thái</th>
+                      <th>Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody id="schedule-tbody">
+                    <tr>
+                      <td colspan="7" class="text-center empty-state">Đang tải lịch dạy...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ATTENDANCE VIEW -->
+        <div id="attendance-view" class="view-panel">
+          <div class="card form-card mb-4">
+            <div class="card-body row-grid">
+              <div class="form-group">
+                <label for="attendance-class-select">Lớp học</label>
+                <select id="attendance-class-select" class="form-control" onchange="onAttendanceClassChange();">
+                  <option value="">-- Chọn lớp học --</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="attendance-session-select">Buổi học</label>
+                <select id="attendance-session-select" class="form-control" onchange="loadAttendanceData();">
+                  <option value="">-- Chọn buổi học --</option>
+                </select>
+              </div>
+              <div class="form-group flex-end">
+                <button class="btn btn-secondary" onclick="markAllAttendancePresent();">✅ Chọn tất cả Có Mặt</button>
+              </div>
+            </div>
+          </div>
+
+          <form id="attendance-form" onsubmit="handleAttendanceSubmit(event);">
+            <div class="card card-table">
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Mã HS</th>
+                        <th>Tên học sinh</th>
+                        <th>Trạng thái điểm danh</th>
+                        <th>Tính phí</th>
+                        <th>Ghi chú buổi học</th>
+                      </tr>
+                    </thead>
+                    <tbody id="attendance-tbody">
+                      <tr>
+                        <td colspan="5" class="text-center empty-state">Vui lòng chọn Lớp học và Buổi học để điểm danh</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="card-footer text-right">
+                <button type="submit" class="btn btn-primary">💾 Lưu kết quả điểm danh</button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <!-- SCORES VIEW -->
+        <div id="scores-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <select id="score-class-select" class="form-control" onchange="renderScores();">
+                <option value="">-- Chọn lớp học --</option>
+              </select>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-primary" onclick="openScoreModal();">➕ Nhập điểm mới</button>
+            </div>
+          </div>
+
+          <div class="card card-table">
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Học sinh</th>
+                      <th>Loại điểm</th>
+                      <th>Điểm số</th>
+                      <th>Thang điểm</th>
+                      <th>Hệ số</th>
+                      <th>Ngày kiểm tra</th>
+                      <th>Nhận xét</th>
+                    </tr>
+                  </thead>
+                  <tbody id="scores-tbody">
+                    <tr>
+                      <td colspan="7" class="text-center empty-state">Vui lòng chọn lớp để xem bảng điểm</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FEES VIEW -->
+        <div id="fees-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <select id="fee-class-select" class="form-control" onchange="renderFees();">
+                <option value="">Tất cả lớp học</option>
+              </select>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-primary" onclick="openFeeModal();">➕ Tạo kỳ học phí</button>
+            </div>
+          </div>
+
+          <div class="card card-table">
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Học sinh</th>
+                      <th>Kỳ thu</th>
+                      <th>Loại học phí</th>
+                      <th>Tổng tiền</th>
+                      <th>Đã thu</th>
+                      <th>Còn lại</th>
+                      <th>Trạng thái</th>
+                      <th>Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fees-tbody">
+                    <tr>
+                      <td colspan="8" class="text-center empty-state">Đang tải thông tin học phí...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MATERIALS VIEW -->
+        <div id="materials-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <select id="material-class-select" class="form-control" onchange="renderMaterials();">
+                <option value="">Tất cả lớp học</option>
+              </select>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-primary" onclick="openMaterialModal();">➕ Upload học liệu</button>
+            </div>
+          </div>
+
+          <div id="materials-grid" class="cards-grid">
+            <!-- Material items rendered here -->
+          </div>
+        </div>
+
+        <!-- COMMENTS VIEW -->
+        <div id="comments-view" class="view-panel">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <select id="comment-class-select" class="form-control" onchange="renderComments();">
+                <option value="">Tất cả lớp học</option>
+              </select>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-primary" onclick="openCommentModal();">➕ Thêm nhận xét</button>
+            </div>
+          </div>
+
+          <div class="card card-table">
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Học sinh</th>
+                      <th>Loại nhận xét</th>
+                      <th>Nội dung</th>
+                      <th>Nguồn AI</th>
+                      <th>Quyền xem</th>
+                      <th>Thời gian</th>
+                    </tr>
+                  </thead>
+                  <tbody id="comments-tbody">
+                    <tr>
+                      <td colspan="6" class="text-center empty-state">Chưa có nhận xét nào</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- REPORTS VIEW -->
+        <div id="reports-view" class="view-panel">
+          <div class="card mb-4">
+            <div class="card-header">
+              <h3>📈 Trung tâm Báo cáo & Thống kê</h3>
+            </div>
+            <div class="card-body row-grid">
+              <div class="form-group">
+                <label>Loại báo cáo</label>
+                <select id="report-type-select" class="form-control">
+                  <option value="attendance">Báo cáo Chuyên cần</option>
+                  <option value="score">Báo cáo Điểm số</option>
+                  <option value="fee">Báo cáo Học phí & Thu chi</option>
+                </select>
+              </div>
+              <div class="form-group flex-end">
+                <button class="btn btn-primary" onclick="generateReport();">📊 Tạo Báo Cáo</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="report-output-container" class="card">
+            <div class="card-body">
+              <div id="report-content" class="empty-state">Vui lòng chọn loại báo cáo và nhấn "Tạo Báo Cáo"</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI ASSISTANT VIEW -->
+        <div id="ai-assistant-view" class="view-panel">
+          <div class="ai-container">
+            <div class="ai-sidebar-tools">
+              <h3>🤖 Trợ lý AI Giáo Dục</h3>
+              <ul class="ai-menu-list">
+                <li class="active" onclick="switchAiTool('comment');">✍️ Viết nhận xét học sinh</li>
+                <li onclick="switchAiTool('risk');">⚠️ Phân tích rủi ro học tập</li>
+                <li onclick="switchAiTool('quiz');">📝 Tạo đề kiểm tra nhanh</li>
+                <li onclick="switchAiTool('fee_msg');">💬 Mẫu tin nhắn nhắc học phí</li>
+              </ul>
+            </div>
+
+            <div class="ai-workspace">
+              <div class="card">
+                <div class="card-header">
+                  <h3 id="ai-tool-title">Viết nhận xét học sinh tự động</h3>
+                </div>
+                <div class="card-body">
+                  <div class="form-group mb-3">
+                    <label>Ngữ cảnh / Dữ liệu đầu vào</label>
+                    <textarea id="ai-context-input" class="form-control" rows="4" placeholder="Nhập tên học sinh, tình hình phát biểu, điểm số gần đây..."></textarea>
+                  </div>
+                  <button class="btn btn-ai" onclick="runAiAssistant();">✨ Tạo nội dung với Gemini AI</button>
+                </div>
+              </div>
+
+              <div class="card mt-4">
+                <div class="card-header">
+                  <h3>📄 Kết quả từ AI</h3>
+                </div>
+                <div class="card-body">
+                  <div id="ai-result-output" class="ai-output-box">
+                    Kết quả xử lý từ AI sẽ xuất hiện tại đây...
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div> <!-- /content-container -->
+    </main>
+  </div> <!-- /app-container -->
+
+  <!-- Global Modals & Notifications -->
+
+  <!-- Loading Indicator Overlay -->
+  <div id="loading-indicator" class="loading-overlay" style="display: none;">
+    <div class="spinner-container">
+      <div class="spinner"></div>
+      <span class="loading-text">Đang xử lý dữ liệu...</span>
+    </div>
+  </div>
+
+  <!-- Error Notification Toast -->
+  <div id="error-message" class="toast toast-error" style="display: none;">
+    <span class="toast-icon">❌</span>
+    <span class="toast-text">Có lỗi xảy ra</span>
+    <button class="toast-close" onclick="this.parentElement.style.display='none';">×</button>
+  </div>
+
+  <!-- Success Notification Toast -->
+  <div id="success-message" class="toast toast-success" style="display: none;">
+    <span class="toast-icon">✅</span>
+    <span class="toast-text">Thao tác thành công</span>
+    <button class="toast-close" onclick="this.parentElement.style.display='none';">×</button>
+  </div>
+
+  <!-- Confirmation Dialog Modal -->
+  <div id="confirmation-dialog" class="modal-overlay" style="display: none;">
+    <div class="modal-box card">
+      <div class="modal-header card-header">
+        <h3>Xác nhận thao tác</h3>
+      </div>
+      <div class="modal-body card-body">
+        <p id="confirm-dialog-msg">Bạn có chắc chắn muốn thực hiện thao tác này?</p>
+      </div>
+      <div class="modal-footer card-footer text-right">
+        <button id="btn-cancel" class="btn btn-outline" onclick="closeConfirmationDialog(false);">Hủy bỏ</button>
+        <button id="btn-save" class="btn btn-primary" onclick="closeConfirmationDialog(true);">Xác nhận</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dynamic Generic Form Modal -->
+  <div id="generic-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-box card modal-lg">
+      <div class="modal-header card-header">
+        <h3 id="generic-modal-title">Biểu mẫu dữ liệu</h3>
+        <button class="modal-close-btn" onclick="closeGenericModal();">×</button>
+      </div>
+      <div id="generic-modal-body" class="modal-body card-body">
+        <!-- Form elements rendered dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Khai báo các hàm giao diện hỗ trợ thao tác trực tiếp trên HTML
+    function onAttendanceClassChange() {
+      if (typeof renderAttendance === 'function') renderAttendance();
+    }
+
+    function loadAttendanceData() {
+      if (typeof renderAttendance === 'function') renderAttendance();
+    }
+
+    function markAllAttendancePresent() {
+      const inputs = document.querySelectorAll('#attendance-tbody select, #attendance-tbody input[type="radio"]');
+      inputs.forEach(el => {
+        if (el.tagName === 'SELECT') el.value = 'PRESENT';
+        if (el.type === 'radio' && el.value === 'PRESENT') el.checked = true;
+      });
+    }
+
+    function closeConfirmationDialog(confirmed) {
+      const dialog = document.getElementById('confirmation-dialog');
+      if (dialog) dialog.style.display = 'none';
+      if (window._confirmCallback && typeof window._confirmCallback === 'function') {
+        if (confirmed) window._confirmCallback();
+        window._confirmCallback = null;
+      }
+    }
+
+    function closeGenericModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function openStudentModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Thêm học sinh mới';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleStudentFormSubmit==='function') handleStudentFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Họ và tên *</label><input type="text" name="fullName" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Mã học sinh</label><input type="text" name="code" class="form-control"></div>
+            <div class="form-group mb-2"><label>SĐT</label><input type="tel" name="phone" class="form-control"></div>
+            <div class="form-group mb-2"><label>Email</label><input type="email" name="email" class="form-control"></div>
+            <div class="form-group mb-2"><label>Phụ huynh</label><input type="text" name="parentName" class="form-control"></div>
+            <div class="form-group mb-2"><label>SĐT Phụ huynh</label><input type="tel" name="parentPhone" class="form-control"></div>
+            <div class="form-group mb-2"><label>Trạng thái</label><select name="status" class="form-control"><option value="ACTIVE">Đang học</option><option value="INACTIVE">Nghỉ học</option></select></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function openClassModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Tạo lớp học mới';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleClassFormSubmit==='function') handleClassFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Tên lớp *</label><input type="text" name="className" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Môn học *</label><input type="text" name="subject" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Trình độ *</label><input type="text" name="level" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Phòng học</label><input type="text" name="room" class="form-control"></div>
+            <div class="form-group mb-2"><label>Học phí mặc định</label><input type="number" name="defaultFee" class="form-control"></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function openSessionModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Tạo buổi học mới';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleSessionFormSubmit==='function') handleSessionFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Lớp học *</label><input type="text" name="classId" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Chủ đề</label><input type="text" name="topic" class="form-control"></div>
+            <div class="form-group mb-2"><label>Nội dung</label><textarea name="content" class="form-control"></textarea></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function openScoreModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Nhập điểm số';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleScoreFormSubmit==='function') handleScoreFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Loại điểm *</label><input type="text" name="scoreType" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Điểm *</label><input type="number" step="0.1" name="score" class="form-control" required></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function openFeeModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Tạo kỳ học phí';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleFeeFormSubmit==='function') handleFeeFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Kỳ thu *</label><input type="text" name="period" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Loại phí *</label><input type="text" name="feeType" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Đơn giá *</label><input type="number" name="unitPrice" class="form-control" required></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function openMaterialModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Upload học liệu';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleMaterialFormSubmit==='function') handleMaterialFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Tiêu đề *</label><input type="text" name="title" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Loại *</label><input type="text" name="type" class="form-control" required></div>
+            <div class="form-group mb-2"><label>URL tài liệu</label><input type="url" name="url" class="form-control"></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function openCommentModal() {
+      const modal = document.getElementById('generic-modal');
+      if (modal) {
+        document.getElementById('generic-modal-title').innerText = 'Thêm nhận xét';
+        document.getElementById('generic-modal-body').innerHTML = `
+          <form id="generic-modal-form" onsubmit="if(typeof handleCommentFormSubmit==='function') handleCommentFormSubmit(event); return false;">
+            <div class="form-group mb-2"><label>Loại nhận xét *</label><input type="text" name="type" class="form-control" required></div>
+            <div class="form-group mb-2"><label>Nội dung *</label><textarea name="content" class="form-control" required></textarea></div>
+            <div class="text-right mt-3"><button type="button" class="btn btn-outline" onclick="closeGenericModal()">Hủy</button> <button type="submit" class="btn btn-primary">Lưu</button></div>
+          </form>`;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function generateReport() {
+      const reportType = document.getElementById('report-type-select').value;
+      const output = document.getElementById('report-content');
+      if (output) {
+        output.innerHTML = '<div class="alert alert-info">Đang tổng hợp báo cáo: ' + reportType + '...</div>';
+      }
+    }
+
+    function switchAiTool(tool) {
+      const titles = {
+        'comment': 'Viết nhận xét học sinh tự động',
+        'risk': 'Phân tích rủi ro học tập',
+        'quiz': 'Tạo đề kiểm tra nhanh',
+        'fee_msg': 'Mẫu tin nhắn nhắc học phí'
+      };
+      const titleEl = document.getElementById('ai-tool-title');
+      if (titleEl && titles[tool]) {
+        titleEl.innerText = titles[tool];
+      }
+      document.querySelectorAll('.ai-menu-list li').forEach(li => li.classList.remove('active'));
+      if (window.event && window.event.currentTarget) {
+        window.event.currentTarget.classList.add('active');
+      }
+    }
+
+    function runAiAssistant() {
+      const input = document.getElementById('ai-context-input');
+      const output = document.getElementById('ai-result-output');
+      if (!input || !output) return;
+      output.innerText = 'Đang gửi yêu cầu tới trợ lý AI, vui lòng đợi...';
+    }
+  </script>
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
