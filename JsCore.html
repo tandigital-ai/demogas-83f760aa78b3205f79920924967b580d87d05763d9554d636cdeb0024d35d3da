@@ -1,0 +1,171 @@
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const rnd = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, '0')).join('');
+const App = { token: localStorage.getItem('edu_token') || '', me: null, perms: {}, menu: [], modules: {},
+              settings: {}, view: 'today', lastSync: 0, pollTimer: null, tab: {} };
+const can = (m, a) => !!(App.perms[m] && App.perms[m].includes(a));
+
+/** Gọi server: luôn trả Promise. Lỗi mạng → errorCode NETWORK */
+function call(action, payload) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.ok) return resolve(res.data);
+        const e = res || { errorCode: 'UNKNOWN_ERROR', message: 'Lỗi không xác định' };
+        if (e.errorCode === 'AUTH_REQUIRED' || e.errorCode === 'ACCOUNT_LOCKED') logoutLocal(e.message);
+        reject(e);
+      })
+      .withFailureHandler(err => reject({ errorCode: 'NETWORK', message: 'Mất kết nối máy chủ: ' + (err && err.message || err) }))
+      .api(action, App.token, payload || {});
+  });
+}
+function toast(msg, type) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || ''); t.textContent = msg;
+  $('#toasts').appendChild(t); setTimeout(() => t.remove(), type === 'err' ? 6000 : 2800);
+}
+function openModal(html) { $('#modalBox').innerHTML = html; $('#modal').classList.remove('hidden'); }
+function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').innerHTML = ''; }
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+
+/* ================= OPTIMISTIC STORE ================= */
+const Store = {
+  data: { Users: {}, Roles: {}, Settings: {}, Students: {}, Classes: {}, ClassMembers: {} },
+  queue: JSON.parse(localStorage.getItem('edu_queue') || '[]'),
+  saveQueue() { localStorage.setItem('edu_queue', JSON.stringify(this.queue)); },
+  setAll(type, list, idKey) { this.data[type] = {}; list.forEach(r => { r._sync = 'synced'; this.data[type][r[idKey]] = r; }); },
+  /** 1) Đổi UI ngay 2) pending 3) clientTxnId 4) gửi server */
+  mutate(type, id, op, patch) {
+    const cur = this.data[type][id];
+    const before = cur ? JSON.parse(JSON.stringify(cur)) : null;
+    const m = { clientTxnId: 'txn_' + rnd(10), entityType: type, entityId: id, op, payload: patch,
+                clientVersion: cur && cur.version !== '' && cur.version !== undefined ? cur.version : null };
+    this.data[type][id] = Object.assign({}, cur || {}, patch, { _sync: 'pending' });
+    render();
+    this.send(m, before);
+  },
+  send(m, before) {
+    if (!navigator.onLine) return this.toQueue(m);
+    call('mutate', m).then(r => {
+      if (r.record) this.data[m.entityType][m.entityId] = Object.assign(r.record, { _sync: 'synced' });
+      render(); toast(r.note || 'Đã lưu ✓', 'ok');
+    }).catch(e => {
+      if (e.errorCode === 'NETWORK') return this.toQueue(m);
+      if (e.errorCode === 'VERSION_CONFLICT') {
+        this.data[m.entityType][m.entityId]._sync = 'conflict'; render();
+        return resolveConflict(m, e.details.server);
+      }
+      if (before) this.data[m.entityType][m.entityId] = before; else delete this.data[m.entityType][m.entityId];
+      render(); toast('↩️ Đã hoàn tác: ' + e.message, 'err');
+    });
+  },
+  toQueue(m) {
+    this.queue.push(m); this.saveQueue();
+    const r = this.data[m.entityType][m.entityId]; if (r) r._sync = 'offlineQueued';
+    render(); toast('📴 Đang offline – đã xếp hàng, sẽ tự gửi khi có mạng', 'warn');
+  },
+  flush() {
+    if (!this.queue.length || !navigator.onLine || !App.me) return;
+    const batch = this.queue.splice(0); this.saveQueue();
+    call('mutateBatch', { mutations: batch }).then(res => {
+      res.results.forEach((r, i) => {
+        const m = batch[i], rec = this.data[m.entityType][m.entityId];
+        if (r.ok && r.record) this.data[m.entityType][m.entityId] = Object.assign(r.record, { _sync: 'synced' });
+        else if (!r.ok) { if (rec) rec._sync = r.errorCode === 'VERSION_CONFLICT' ? 'conflict' : 'error'; toast(r.message, 'err'); }
+      });
+      render(); toast('Đã gửi ' + batch.length + ' thao tác chờ', 'ok');
+    }).catch(() => { this.queue = batch.concat(this.queue); this.saveQueue(); });
+  }
+};
+const syncBadge = r => ({ pending: '<span class="badge">⏳ Đang lưu</span>', error: '<span class="badge err">⚠️ Lỗi</span>',
+  conflict: '<span class="badge warn">⚡ Xung đột</span>', offlineQueued: '<span class="badge warn">📴 Chờ mạng</span>' }[r && r._sync] || '');
+
+function resolveConflict(m, server) {
+  openModal(`<h3>⚡ Xung đột dữ liệu</h3><p>Người khác vừa sửa bản ghi này (lúc ${esc(server.updatedAt)} bởi ${esc(server.updatedBy)}).</p>
+    <p>Bạn muốn giữ bản nào?</p>
+    <button class="btn primary block" id="cfMine">Giữ thay đổi của tôi (ghi đè)</button>
+    <button class="btn block" id="cfServer">Dùng bản mới trên máy chủ</button>`);
+  $('#cfMine').onclick = () => { closeModal(); Store.data[m.entityType][m.entityId] = Object.assign(server, { _sync: 'synced' }); Store.mutate(m.entityType, m.entityId, m.op, m.payload); };
+  $('#cfServer').onclick = () => { closeModal(); Store.data[m.entityType][m.entityId] = Object.assign(server, { _sync: 'synced' }); render(); };
+}
+
+/* ================= KHỞI ĐỘNG / ĐĂNG NHẬP ================= */
+function boot() {
+  applyTheme(localStorage.getItem('edu_theme') || 'light');
+  call('bootstrap', { ua: navigator.userAgent }).then(d => d.needLogin ? showLogin(d.centerName) : enterApp(d))
+    .catch(e => { $('#splash').innerHTML = '<p>⚠️ ' + esc(e.message) + '</p><button class="btn primary" onclick="location.reload()">Thử lại</button>'; });
+}
+function showLogin(center) {
+  $('#splash').classList.add('hidden'); $('#shell').classList.add('hidden'); $('#login').classList.remove('hidden');
+  $('#loginCenter').textContent = center || 'EduClass AI';
+}
+$('#btnSendOtp').onclick = () => {
+  const email = $('#inEmail').value.trim(); if (!email) return;
+  $('#btnSendOtp').disabled = true; $('#loginMsg').textContent = 'Đang gửi…';
+  call('authRequestOtp', { email }).then(d => {
+    $('#loginMsg').textContent = d.message; $('#stepEmail').classList.add('hidden'); $('#stepCode').classList.remove('hidden'); $('#inCode').focus();
+  }).catch(e => $('#loginMsg').textContent = '⚠️ ' + e.message).finally(() => $('#btnSendOtp').disabled = false);
+};
+$('#btnVerify').onclick = () => {
+  $('#btnVerify').disabled = true;
+  call('authVerifyOtp', { email: $('#inEmail').value.trim(), code: $('#inCode').value.trim(), ua: navigator.userAgent })
+    .then(enterApp).catch(e => $('#loginMsg').textContent = '⚠️ ' + e.message).finally(() => $('#btnVerify').disabled = false);
+};
+$('#btnBack').onclick = () => { $('#stepCode').classList.add('hidden'); $('#stepEmail').classList.remove('hidden'); };
+function enterApp(d) {
+  if (d.token) { App.token = d.token; localStorage.setItem('edu_token', d.token); }
+  Object.assign(App, { me: d.user, perms: d.perms, menu: d.menu, modules: d.modules, settings: d.settings, aiQuota: d.aiQuota, lastSync: d.serverVersion });
+  document.documentElement.style.setProperty('--pri', d.settings.THEME_COLOR || '#4F46E5');
+  $('#brandName').textContent = d.settings.CENTER_NAME || 'EduClass AI';
+  $('#meName').textContent = d.user.fullName; $('#meRole').textContent = d.user.roleName;
+  $('#splash').classList.add('hidden'); $('#login').classList.add('hidden'); $('#shell').classList.remove('hidden');
+  buildNav(); go(App.menu.some(x => x.id === App.view) ? App.view : (App.menu[0] || {}).id || 'today');
+  startPolling(); Store.flush();
+}
+function logoutLocal(msg) {
+  localStorage.removeItem('edu_token'); App.token = ''; App.me = null;
+  clearInterval(App.pollTimer); showLogin(App.settings.CENTER_NAME); if (msg) $('#loginMsg').textContent = '⚠️ ' + msg;
+}
+$('#btnLogout').onclick = () => call('logout').finally(() => logoutLocal());
+
+/* ================= ĐIỀU HƯỚNG ================= */
+function buildNav() {
+  $('#sideNav').innerHTML = App.menu.map(x => `<div class="nav-item" data-go="${x.id}"><span>${x.icon}</span>${esc(x.label)}</div>`).join('');
+  $('#bottomNav').innerHTML = App.menu.filter(x => x.mobile).slice(0, 5)
+    .map(x => `<a data-go="${x.id}"><span>${x.icon}</span>${esc(x.label)}</a>`).join('');
+  document.querySelectorAll('[data-go]').forEach(el => el.onclick = () => { go(el.dataset.go); toggleMenu(false); });
+}
+function go(view) {
+  App.view = view; const item = App.menu.find(x => x.id === view);
+  $('#pageTitle').textContent = item ? item.label : 'EduClass AI';
+  document.querySelectorAll('[data-go]').forEach(el => el.classList.toggle('active', el.dataset.go === view));
+  (Views[view] && Views[view].load ? Views[view].load() : Promise.resolve()).then(render)
+    .catch(e => { $('#main').innerHTML = '<div class="card">⚠️ ' + esc(e.message) + '</div>'; });
+}
+function render() { if (!App.me) return; (Views[App.view] ? Views[App.view].render : Views._soon.render)(); }
+function toggleMenu(open) { $('#sidebar').classList.toggle('open', open); $('#backdrop').classList.toggle('show', open); }
+$('#btnMenu').onclick = () => toggleMenu(true); $('#backdrop').onclick = () => toggleMenu(false);
+function applyTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('edu_theme', t); }
+$('#btnTheme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+
+/* ================= MẠNG + ĐỒNG BỘ (polling nhẹ) ================= */
+function setNet() { const on = navigator.onLine; $('#netBadge').className = 'badge ' + (on ? 'ok' : 'warn'); $('#netBadge').textContent = on ? '● Trực tuyến' : '● Offline'; }
+window.addEventListener('online', () => { setNet(); Store.flush(); });
+window.addEventListener('offline', setNet);
+function startPolling() {
+  clearInterval(App.pollTimer);
+  const sec = Math.max(15, Number(App.settings.SYNC_POLL_SECONDS || 20));
+  App.pollTimer = setInterval(() => {
+    if (document.hidden || !navigator.onLine || !App.me) return;
+    call('syncSince', { version: App.lastSync }).then(d => {
+      const types = new Set(d.changes.map(c => c.entityType));
+      App.lastSync = d.serverVersion;
+      const v = Views[App.view];
+      const busy = Object.values(Store.data).some(t => Object.values(t).some(r => r._sync === 'pending'));
+      if (v && v.watch && v.watch.some(t => types.has(t)) && !busy) v.load().then(render);
+    }).catch(() => {});
+  }, sec * 1000);
+}
+document.addEventListener('DOMContentLoaded', () => { setNet(); boot(); });
+</script>

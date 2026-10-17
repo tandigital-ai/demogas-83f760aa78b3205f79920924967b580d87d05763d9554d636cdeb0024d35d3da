@@ -1,0 +1,321 @@
+<script>
+const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const STU_ST = { ACTIVE: ['Đang học', 'ok'], TRIAL: ['Học thử', ''], PAUSED: ['Tạm nghỉ', 'warn'], QUIT: ['Nghỉ hẳn', 'err'] };
+const CLS_ST = { ACTIVE: ['Đang hoạt động', 'ok'], PAUSED: ['Tạm dừng', 'warn'], ENDED: ['Đã kết thúc', 'err'] };
+const TUI = { PER_SESSION: 'Theo buổi', MONTHLY: 'Theo tháng', COURSE: 'Theo khóa', PACKAGE: 'Theo gói buổi', CUSTOM: 'Tùy chỉnh' };
+const today = () => new Date().toLocaleDateString('sv-SE');
+const money = n => Number(n || 0).toLocaleString('vi-VN') + 'đ';
+const live = t => Object.values(Store.data[t] || {}).filter(r => !r.deletedAt);
+const sched = j => { try { return JSON.parse(j || '[]'); } catch (e) { return []; } };
+const schedText = j => sched(j).map(s => WD[s.weekday] + ' ' + s.start + '–' + s.end).join(' · ') || 'Chưa có lịch cố định';
+const staffName = id => (App.staff || {})[id] || '—';
+const membersOf = cid => live('ClassMembers').filter(m => m.classId === cid && m.status === 'ACTIVE');
+const classesOf = sid => live('ClassMembers').filter(m => m.studentId === sid && m.status === 'ACTIVE').map(m => Store.data.Classes[m.classId]).filter(Boolean);
+const okEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
+function loadPeople() {
+  return call('peopleLoad').then(d => {
+    Store.setAll('Students', d.students, 'studentId'); Store.setAll('Classes', d.classes, 'classId');
+    Store.setAll('ClassMembers', d.members, 'memberId');
+    App.staff = {}; d.staff.forEach(s => App.staff[s.userId] = s.fullName); App.staffList = d.staff;
+  });
+}
+
+/* Làm mới cửa sổ chi tiết lớp sau mỗi lần cập nhật */
+const _renderBase = render;
+render = function () { _renderBase(); const el = $('#clsDetail'); if (el && !$('#modal').classList.contains('hidden')) openClassDetail(el.dataset.c); };
+
+/* Optimistic nhiều thao tác cùng lúc – gửi theo lô 25 */
+function mutateMany(list, okMsg) {
+  const backups = [], muts = list.map(x => {
+    const cur = Store.data[x.type][x.id];
+    backups.push(cur ? JSON.parse(JSON.stringify(cur)) : null);
+    Store.data[x.type][x.id] = Object.assign({}, cur || {}, x.patch, { _sync: 'pending' });
+    return { clientTxnId: 'txn_' + rnd(10), entityType: x.type, entityId: x.id, op: x.op, payload: x.patch,
+             clientVersion: cur && cur.version !== '' && cur.version != null ? cur.version : null };
+  });
+  render();
+  let ok = 0, fail = 0, i = 0;
+  const undo = (m, b) => { if (b) Store.data[m.entityType][m.entityId] = b; else delete Store.data[m.entityType][m.entityId]; };
+  const next = () => {
+    if (i >= muts.length) { render(); toast(fail ? `Đã lưu ${ok}, lỗi ${fail}` : `${okMsg || 'Đã lưu'} ✓ (${ok})`, fail ? 'warn' : 'ok'); return; }
+    const start = i, chunk = muts.slice(i, i + 25); i += 25;
+    call('mutateBatch', { mutations: chunk }).then(res => {
+      res.results.forEach((r, k) => {
+        const m = chunk[k];
+        if (r.ok) { ok++; if (r.record) Store.data[m.entityType][m.entityId] = Object.assign(r.record, { _sync: 'synced' }); if (r.note) toast(r.note, 'ok'); }
+        else { fail++; undo(m, backups[start + k]); toast('↩️ ' + r.message, 'err'); }
+      });
+      render(); next();
+    }).catch(e => {
+      if (e.errorCode === 'NETWORK') chunk.forEach(m => Store.toQueue(m));
+      else { chunk.forEach((m, k) => undo(m, backups[start + k])); fail += chunk.length; toast(e.message, 'err'); }
+      next();
+    });
+  };
+  next();
+}
+function bindSearch(id, obj, key) {
+  const el = $('#' + id);
+  el.oninput = () => { obj[key] = el.value; render(); const n = $('#' + id); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+}
+const optList = (obj, v) => Object.keys(obj).map(k => `<option value="${k}" ${v === k ? 'selected' : ''}>${Array.isArray(obj[k]) ? obj[k][0] : obj[k]}</option>`).join('');
+const activeClassOptions = () => live('Classes').filter(c => c.status === 'ACTIVE').map(c => `<option value="${c.classId}">${esc(c.className)}</option>`).join('');
+
+/* ===================== HỌC SINH ===================== */
+Views.students = {
+  watch: ['Students', 'ClassMembers', 'Classes'], load: loadPeople,
+  render() {
+    const f = App.sf || (App.sf = { q: '', st: '', cls: '' });
+    let list = live('Students');
+    if (f.q) { const q = f.q.toLowerCase(); list = list.filter(s => [s.fullName, s.code, s.phone, s.parentPhone, s.parentName].join(' ').toLowerCase().includes(q)); }
+    if (f.st) list = list.filter(s => s.status === f.st);
+    if (f.cls) { const ids = new Set(membersOf(f.cls).map(m => m.studentId)); list = list.filter(s => ids.has(s.studentId)); }
+    list.sort((a, b) => String(a.fullName).localeCompare(b.fullName, 'vi'));
+    $('#main').innerHTML = `<div class="card"><div class="row">
+      <input class="input grow" id="sQ" placeholder="🔍 Tên, mã, SĐT…" value="${esc(f.q)}">
+      <select class="input" id="sSt" style="width:auto"><option value="">Mọi trạng thái</option>${optList(STU_ST, f.st)}</select>
+      <select class="input" id="sCls" style="width:auto"><option value="">Mọi lớp</option>${live('Classes').map(c => `<option value="${c.classId}" ${f.cls === c.classId ? 'selected' : ''}>${esc(c.className)}</option>`).join('')}</select>
+      ${can('students', 'import') ? '<button class="btn" onclick="openImport()">📥 Import</button>' : ''}</div>
+      <p class="muted small">${list.length} học sinh</p></div>
+      <div class="grid">${list.map(stuCard).join('') || '<div class="card muted">Chưa có học sinh</div>'}</div>
+      ${can('students', 'create') ? '<button class="fab" onclick="openStudentForm()">＋</button>' : ''}`;
+    bindSearch('sQ', f, 'q');
+    $('#sSt').onchange = e => { f.st = e.target.value; render(); };
+    $('#sCls').onchange = e => { f.cls = e.target.value; render(); };
+  }
+};
+function stuCard(s) {
+  const st = STU_ST[s.status] || [s.status, ''];
+  return `<div class="card ${s._sync === 'pending' ? 'sync-pending' : ''}">
+    <div class="row"><b class="grow">${esc(s.fullName)}</b>${syncBadge(s)}</div>
+    <div class="muted small">${esc(s.code || 'Đang cấp mã…')}${s.school ? ' · ' + esc(s.school) : ''}${s.grade ? ' · Lớp ' + esc(s.grade) : ''}</div>
+    <div class="row" style="margin:6px 0"><span class="badge ${st[1]}">${st[0]}</span>${classesOf(s.studentId).map(c => `<span class="badge" style="background:${esc(c.color)}22;color:${esc(c.color)}">${esc(c.className)}</span>`).join('')}</div>
+    <div class="muted small">👪 ${esc(s.parentName || '—')}${s.parentPhone ? ` · <a href="tel:${esc(s.parentPhone)}">${esc(s.parentPhone)}</a>` : ''}</div>
+    <div class="row" style="margin-top:8px"><button class="btn" onclick="openProfile('${s.studentId}')">👁️ Hồ sơ</button>
+    ${can('students', 'update') ? `<button class="btn" onclick="openStudentForm('${s.studentId}')">✏️ Sửa</button>` : ''}</div></div>`;
+}
+const STU_FORM = [['fullName', 'Họ tên *'], ['dob', 'Ngày sinh', 'date'], ['gender', 'Giới tính', 'sel:Nam,Nữ,Khác'], ['status', 'Trạng thái', 'status'],
+  ['phone', 'SĐT học sinh', 'tel'], ['email', 'Email học sinh', 'email'], ['school', 'Trường'], ['grade', 'Lớp đang học ở trường'],
+  ['parentName', 'Tên phụ huynh'], ['parentPhone', 'SĐT phụ huynh', 'tel'], ['parentEmail', 'Email phụ huynh (tự tạo tài khoản PH)', 'email'],
+  ['address', 'Địa chỉ'], ['goal', 'Mục tiêu học tập'], ['entryLevel', 'Trình độ đầu vào'], ['source', 'Nguồn tuyển sinh'],
+  ['startDate', 'Ngày bắt đầu', 'date'], ['note', 'Ghi chú', 'area']];
+function fieldHtml([k, lb, t], val) {
+  let inp;
+  if (t === 'status') inp = `<select class="input" id="f_${k}">${optList(STU_ST, val)}</select>`;
+  else if (t && t.startsWith('sel:')) inp = `<select class="input" id="f_${k}"><option value=""></option>${t.slice(4).split(',').map(x => `<option ${val === x ? 'selected' : ''}>${x}</option>`).join('')}</select>`;
+  else if (t === 'area') inp = `<textarea class="input" id="f_${k}" rows="2">${esc(val)}</textarea>`;
+  else inp = `<input class="input" id="f_${k}" type="${t || 'text'}" value="${esc(val)}">`;
+  return `<label class="lb">${lb}</label>${inp}`;
+}
+function openStudentForm(id) {
+  const s = id ? Store.data.Students[id] : { status: 'ACTIVE', startDate: today() };
+  openModal(`<h3>${id ? '✏️ Sửa học sinh' : '➕ Thêm học sinh'}</h3>${STU_FORM.map(d => fieldHtml(d, s[d[0]] || '')).join('')}
+    ${!id && can('classes', 'update') ? `<label class="lb">Xếp vào lớp (tùy chọn)</label><select class="input" id="f_class"><option value="">— Không —</option>${activeClassOptions()}</select>` : ''}
+    <button class="btn primary block" id="fSave">💾 Lưu</button>
+    ${id && can('students', 'delete') ? '<button class="btn danger block" id="fDel">🗄️ Lưu trữ (xóa mềm)</button>' : ''}
+    <button class="btn ghost block" onclick="closeModal()">Hủy</button>`);
+  $('#fSave').onclick = () => {
+    const p = {}; STU_FORM.forEach(([k]) => p[k] = $('#f_' + k).value.trim());
+    if (!p.fullName) return toast('Thiếu họ tên', 'warn');
+    if (p.parentEmail && !okEmail(p.parentEmail)) return toast('Email phụ huynh không hợp lệ', 'warn');
+    if (p.email && !okEmail(p.email)) return toast('Email học sinh không hợp lệ', 'warn');
+    if (id) {
+      const cur = Store.data.Students[id], patch = {};
+      Object.keys(p).forEach(k => { if (String(cur[k] || '') !== p[k]) patch[k] = p[k]; });
+      closeModal(); if (Object.keys(patch).length) Store.mutate('Students', id, 'update', patch); return;
+    }
+    const sid = 'stu_' + rnd(6), list = [{ type: 'Students', id: sid, op: 'create', patch: p }], cid = $('#f_class') && $('#f_class').value;
+    if (cid) list.push({ type: 'ClassMembers', id: 'mem_' + rnd(6), op: 'create', patch: { classId: cid, studentId: sid, joinDate: today(), status: 'ACTIVE' } });
+    closeModal(); mutateMany(list, 'Đã thêm học sinh');
+  };
+  if ($('#fDel')) $('#fDel').onclick = () => {
+    if (!confirm('Lưu trữ học sinh này? Dữ liệu vẫn được giữ trong hệ thống.')) return;
+    closeModal(); Store.mutate('Students', id, 'archive', { deletedAt: 'pending' });
+  };
+}
+function openProfile(id) {
+  const s = Store.data.Students[id], hist = live('ClassMembers').filter(m => m.studentId === id);
+  const age = s.dob ? Math.floor((Date.now() - new Date(s.dob)) / 31557600000) : '';
+  const row = (k, v) => v ? `<div class="row"><span class="muted" style="width:130px">${k}</span><b class="grow">${esc(v)}</b></div>` : '';
+  openModal(`<h3>👤 ${esc(s.fullName)} <span class="badge">${esc(s.code || '')}</span></h3>
+    <div class="card">${row('Ngày sinh', s.dob ? s.dob + ' (' + age + ' tuổi)' : '')}${row('Giới tính', s.gender)}${row('Trường / lớp', [s.school, s.grade].filter(Boolean).join(' – '))}
+    ${row('SĐT', s.phone)}${row('Email', s.email)}${row('Địa chỉ', s.address)}${row('Mục tiêu', s.goal)}${row('Trình độ đầu vào', s.entryLevel)}
+    ${row('Nguồn', s.source)}${row('Bắt đầu học', s.startDate)}${row('Ghi chú', s.note)}</div>
+    <div class="card"><b>👪 Phụ huynh</b>${row('Họ tên', s.parentName)}${row('SĐT', s.parentPhone)}${row('Email', s.parentEmail)}</div>
+    <div class="card"><b>🏫 Lịch sử lớp</b>${hist.map(m => { const c = Store.data.Classes[m.classId] || {};
+      return `<div class="row"><span class="grow">${esc(c.className || m.classId)}</span><span class="muted small">${esc(m.joinDate)} → ${esc(m.leaveDate || 'nay')}</span><span class="badge ${m.status === 'ACTIVE' ? 'ok' : ''}">${m.status === 'ACTIVE' ? 'Đang học' : 'Đã rời'}</span></div>`; }).join('') || '<p class="muted">Chưa vào lớp nào</p>'}</div>
+    <div class="card muted small">✅ Chuyên cần (Gói 4) · 📊 Điểm (Gói 5) · 💰 Học phí (Gói 6) · 💬 Nhận xét và ✨ AI tóm tắt (Gói 7) sẽ hiển thị tại đây.</div>
+    <button class="btn ghost block" onclick="closeModal()">Đóng</button>`);
+}
+
+/* ===================== IMPORT ===================== */
+const IMP_MAP = { fullName: ['họ tên', 'họ và tên', 'tên học sinh', 'ho ten', 'họ tên học sinh'], dob: ['ngày sinh', 'ngay sinh'], gender: ['giới tính', 'gioi tinh'],
+  phone: ['sđt', 'sdt', 'sđt học sinh', 'điện thoại'], email: ['email', 'email học sinh'], school: ['trường', 'truong'], grade: ['lớp', 'khối'],
+  parentName: ['phụ huynh', 'tên phụ huynh', 'họ tên phụ huynh'], parentPhone: ['sđt phụ huynh', 'sdt phụ huynh', 'sđt ph'],
+  parentEmail: ['email phụ huynh', 'email ph'], address: ['địa chỉ', 'dia chi'], goal: ['mục tiêu'], note: ['ghi chú', 'ghi chu'] };
+const normH = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+function toIsoDate(v) {
+  v = String(v || '').trim(); let m;
+  if ((m = v.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/))) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  return v ? null : '';
+}
+function parseImport(txt) {
+  const lines = txt.split(/\r?\n/).filter(l => l.trim()); if (!lines.length) return [];
+  const cells = lines.map(l => l.split('\t'));
+  let cols = cells[0].map(h => Object.keys(IMP_MAP).find(k => IMP_MAP[k].includes(normH(h))) || null), data = cells.slice(1);
+  if (!cols.includes('fullName')) { cols = ['fullName', 'dob', 'gender', 'school', 'grade', 'parentName', 'parentPhone', 'parentEmail']; data = cells; }
+  const key = o => normH(o.fullName) + '|' + (o.parentPhone || o.dob || '');
+  const exist = new Set(live('Students').map(key)), seen = new Set();
+  return data.slice(0, 300).map(r => {
+    const o = {}; cols.forEach((k, i) => { if (k) o[k] = String(r[i] || '').trim(); });
+    if (o.dob) { const d = toIsoDate(o.dob); if (d === null) o._err = 'Ngày sinh sai (dùng dd/mm/yyyy)'; else o.dob = d; }
+    if (o.gender) { const g = o.gender.toLowerCase(); o.gender = g === 'nam' ? 'Nam' : (g === 'nữ' || g === 'nu') ? 'Nữ' : 'Khác'; }
+    if (o.parentEmail && !okEmail(o.parentEmail)) o._err = 'Email phụ huynh sai';
+    if (!o.fullName) o._err = 'Thiếu họ tên';
+    if (!o._err && (exist.has(key(o)) || seen.has(key(o)))) o._dup = true;
+    seen.add(key(o));
+    return o;
+  });
+}
+function openImport() {
+  openModal(`<h3>📥 Import học sinh</h3>
+    <p class="muted small"><b>Bước 1:</b> Trong Excel/Google Sheets, bôi đen vùng dữ liệu (gồm cả dòng tiêu đề) → <b>Ctrl+C</b>.<br>
+    <b>Bước 2:</b> Bấm vào ô dưới → <b>Ctrl+V</b> → bấm <b>Xem trước</b>.<br>
+    Tiêu đề nhận được: Họ tên, Ngày sinh, Giới tính, SĐT, Email, Trường, Lớp, Phụ huynh, SĐT phụ huynh, Email phụ huynh, Địa chỉ, Mục tiêu, Ghi chú. Tối đa 300 dòng mỗi lần.</p>
+    <textarea class="input" id="impTxt" rows="6" placeholder="Dán dữ liệu vào đây…"></textarea>
+    ${can('classes', 'update') ? `<label class="lb">Xếp tất cả vào lớp (tùy chọn)</label><select class="input" id="impCls"><option value="">— Không —</option>${activeClassOptions()}</select>` : ''}
+    <button class="btn block" id="impPrev">👁️ Xem trước</button><div id="impOut"></div>
+    <button class="btn ghost block" onclick="closeModal()">Đóng</button>`);
+  $('#impPrev').onclick = () => {
+    const rows = parseImport($('#impTxt').value), ok = rows.filter(r => !r._err && !r._dup);
+    $('#impOut').innerHTML = `<p><b>${rows.length}</b> dòng · ✅ ${ok.length} hợp lệ · ⚠️ ${rows.filter(r => r._dup).length} trùng (bỏ qua) · ❌ ${rows.filter(r => r._err).length} lỗi</p>
+      <div style="max-height:300px;overflow:auto">${rows.map((r, i) => `<div class="small" style="padding:4px 0;border-bottom:1px dashed var(--line)">${r._err ? '❌' : r._dup ? '⚠️' : '✅'} ${i + 1}. <b>${esc(r.fullName || '(trống)')}</b> ${esc(r.dob || '')} · PH: ${esc(r.parentName || '')} ${esc(r.parentPhone || '')} ${r._err ? '<span style="color:var(--err)">' + esc(r._err) + '</span>' : ''}</div>`).join('')}</div>
+      ${ok.length ? `<button class="btn primary block" id="impGo">💾 Lưu ${ok.length} học sinh</button>` : ''}`;
+    if (ok.length) $('#impGo').onclick = () => {
+      const cid = $('#impCls') ? $('#impCls').value : '', list = [];
+      ok.forEach(r => {
+        const sid = 'stu_' + rnd(6), p = { status: 'ACTIVE' };
+        Object.keys(r).forEach(k => { if (k[0] !== '_') p[k] = r[k]; });
+        list.push({ type: 'Students', id: sid, op: 'create', patch: p });
+        if (cid) list.push({ type: 'ClassMembers', id: 'mem_' + rnd(6), op: 'create', patch: { classId: cid, studentId: sid, joinDate: today(), status: 'ACTIVE' } });
+      });
+      closeModal(); mutateMany(list, 'Import xong');
+    };
+  };
+}
+
+/* ===================== LỚP HỌC ===================== */
+Views.classes = {
+  watch: ['Classes', 'ClassMembers', 'Students'], load: loadPeople,
+  render() {
+    const f = App.cf || (App.cf = { q: '', st: 'ACTIVE' });
+    const list = live('Classes').filter(c => (!f.st || c.status === f.st) && (!f.q || [c.className, c.subject, c.code].join(' ').toLowerCase().includes(f.q.toLowerCase())));
+    $('#main').innerHTML = `<div class="card"><div class="row"><input class="input grow" id="cQ" placeholder="🔍 Tên lớp, môn, mã…" value="${esc(f.q)}">
+      <select class="input" id="cSt" style="width:auto"><option value="">Mọi trạng thái</option>${optList(CLS_ST, f.st)}</select></div></div>
+      <div class="grid">${list.map(clsCard).join('') || '<div class="card muted">Chưa có lớp</div>'}</div>
+      ${can('classes', 'create') ? '<button class="fab" onclick="openClassForm()">＋</button>' : ''}`;
+    bindSearch('cQ', f, 'q');
+    $('#cSt').onchange = e => { f.st = e.target.value; render(); };
+  }
+};
+function clsCard(c) {
+  const n = membersOf(c.classId).length, st = CLS_ST[c.status] || [c.status, ''];
+  return `<div class="card ${c._sync === 'pending' ? 'sync-pending' : ''}" style="border-left:5px solid ${esc(c.color || '#4F46E5')}">
+    <div class="row"><b class="grow">${esc(c.className)}</b>${syncBadge(c)}</div>
+    <div class="muted small">${esc(c.code || '')} · ${esc(c.subject || '')}${c.level ? ' · ' + esc(c.level) : ''} · GV: ${esc(staffName(c.teacherId))}</div>
+    <div class="small" style="margin:6px 0">🗓️ ${esc(schedText(c.scheduleJson))}${c.room ? ' · 📍 ' + esc(c.room) : ''}</div>
+    <div class="row"><span class="badge ${st[1]}">${st[0]}</span><span class="badge">👥 ${n}${Number(c.maxStudents) ? '/' + c.maxStudents : ''}</span>
+    ${can('fees', 'view') || can('classes', 'update') ? `<span class="badge">💰 ${money(c.defaultFee)} · ${TUI[c.tuitionType] || ''}</span>` : ''}</div>
+    <div class="row" style="margin-top:8px"><button class="btn" onclick="openClassDetail('${c.classId}')">👥 Học sinh</button>
+    ${can('classes', 'update') ? `<button class="btn" onclick="openClassForm('${c.classId}')">✏️ Sửa</button>` : ''}
+    ${can('classes', 'create') ? `<button class="btn" onclick="openClassForm('${c.classId}',true)">📄 Nhân bản</button>` : ''}</div></div>`;
+}
+function openClassForm(id, dup) {
+  const c = id ? Store.data.Classes[id] : { status: 'ACTIVE', tuitionType: 'PER_SESSION', color: '#4F46E5', maxStudents: 20, defaultFee: 0 };
+  const sc = sched(c.scheduleJson), days = new Set(sc.map(x => x.weekday)), t0 = sc[0] || { start: '18:00', end: '19:30' }, staff = App.staffList || [];
+  const inp = (k, lb, v, t) => `<div class="grow"><label class="lb">${lb}</label><input class="input" id="c_${k}" type="${t || 'text'}" value="${esc(v ?? '')}"></div>`;
+  openModal(`<h3>${dup ? '📄 Nhân bản lớp' : id ? '✏️ Sửa lớp' : '➕ Tạo lớp'}</h3>
+    <div class="row">${inp('className', 'Tên lớp *', dup ? c.className + ' (bản sao)' : c.className)}</div>
+    <div class="row">${inp('code', 'Mã lớp (để trống = tự sinh)', dup ? '' : c.code)}${inp('subject', 'Môn học', c.subject)}</div>
+    <div class="row">${inp('level', 'Cấp độ', c.level)}<div class="grow"><label class="lb">Trạng thái</label><select class="input" id="c_status">${optList(CLS_ST, c.status)}</select></div></div>
+    <label class="lb">Giáo viên chính</label><select class="input" id="c_teacherId"><option value="">— Chọn —</option>${staff.filter(u => u.role !== 'ASSISTANT').map(u => `<option value="${u.userId}" ${c.teacherId === u.userId ? 'selected' : ''}>${esc(u.fullName)}</option>`).join('')}</select>
+    <label class="lb">Trợ giảng (bấm để chọn)</label><div id="c_ast">${staff.filter(u => u.role !== 'ADMIN').map(u => `<span class="chip ${String(c.assistantIds || '').split(',').includes(u.userId) ? 'on' : ''}" data-u="${u.userId}">${esc(u.fullName)}</span>`).join('') || '<span class="muted small">Chưa có người dùng vai trò Trợ giảng/Giáo viên</span>'}</div>
+    <label class="lb">Lịch học cố định (bấm chọn thứ)</label><div id="c_days">${[1, 2, 3, 4, 5, 6, 0].map(d => `<span class="chip ${days.has(d) ? 'on' : ''}" data-d="${d}">${WD[d]}</span>`).join('')}</div>
+    <div class="row">${inp('t1', 'Giờ bắt đầu', t0.start, 'time')}${inp('t2', 'Giờ kết thúc', t0.end, 'time')}</div>
+    <div class="row">${inp('room', 'Phòng học', c.room)}${inp('onlineLink', 'Link học online', c.onlineLink)}</div>
+    <div class="row">${inp('startDate', 'Ngày bắt đầu', c.startDate, 'date')}${inp('endDate', 'Ngày kết thúc', c.endDate, 'date')}</div>
+    <div class="row"><div class="grow"><label class="lb">Kiểu thu phí</label><select class="input" id="c_tuitionType">${optList(TUI, c.tuitionType)}</select></div>${inp('defaultFee', 'Học phí mặc định (đ)', c.defaultFee || 0, 'number')}</div>
+    <div class="row">${inp('maxStudents', 'Sĩ số tối đa (0 = không giới hạn)', c.maxStudents || 0, 'number')}${inp('color', 'Màu lớp', c.color || '#4F46E5', 'color')}</div>
+    <label class="lb">Ghi chú</label><textarea class="input" id="c_note" rows="2">${esc(c.note || '')}</textarea>
+    ${dup ? '<label class="lb"><input type="checkbox" id="c_copy" checked> Sao chép danh sách học sinh sang lớp mới</label>' : ''}
+    <button class="btn primary block" id="cSave">💾 Lưu</button><button class="btn ghost block" onclick="closeModal()">Hủy</button>`);
+  $('#c_days').onclick = e => e.target.dataset.d && e.target.classList.toggle('on');
+  $('#c_ast').onclick = e => e.target.dataset.u && e.target.classList.toggle('on');
+  $('#cSave').onclick = () => {
+    const p = {};
+    ['className', 'code', 'subject', 'level', 'status', 'teacherId', 'room', 'onlineLink', 'startDate', 'endDate', 'tuitionType', 'defaultFee', 'maxStudents', 'color', 'note'].forEach(k => p[k] = $('#c_' + k).value.trim());
+    if (!p.className) return toast('Thiếu tên lớp', 'warn');
+    if (p.startDate && p.endDate && p.endDate < p.startDate) return toast('Ngày kết thúc phải sau ngày bắt đầu', 'warn');
+    const t1 = $('#c_t1').value, t2 = $('#c_t2').value, ds = [...document.querySelectorAll('#c_days .chip.on')].map(x => Number(x.dataset.d));
+    if (ds.length && !(t1 && t2 && t2 > t1)) return toast('Giờ kết thúc phải sau giờ bắt đầu', 'warn');
+    p.scheduleJson = JSON.stringify(ds.map(d => ({ weekday: d, start: t1, end: t2 })));
+    p.assistantIds = [...document.querySelectorAll('#c_ast .chip.on')].map(x => x.dataset.u).join(',');
+    p.defaultFee = Number(p.defaultFee || 0); p.maxStudents = Number(p.maxStudents || 0);
+    if (id && !dup) {
+      const cur = Store.data.Classes[id], patch = {};
+      Object.keys(p).forEach(k => { if (String(cur[k] ?? '') !== String(p[k])) patch[k] = p[k]; });
+      closeModal(); if (Object.keys(patch).length) Store.mutate('Classes', id, 'update', patch); return;
+    }
+    const cid = 'cls_' + rnd(6), list = [{ type: 'Classes', id: cid, op: 'create', patch: p }];
+    if (dup && $('#c_copy').checked) membersOf(id).forEach(m => list.push({ type: 'ClassMembers', id: 'mem_' + rnd(6), op: 'create',
+      patch: { classId: cid, studentId: m.studentId, customFee: m.customFee, joinDate: today(), status: 'ACTIVE' } }));
+    closeModal(); mutateMany(list, dup ? 'Đã nhân bản lớp' : 'Đã tạo lớp');
+  };
+}
+function openClassDetail(cid) {
+  const c = Store.data.Classes[cid]; if (!c) return closeModal();
+  const ms = membersOf(cid), edit = can('classes', 'update'), inCls = new Set(ms.map(m => m.studentId));
+  const others = live('Students').filter(s => !inCls.has(s.studentId) && s.status !== 'QUIT').sort((a, b) => a.fullName.localeCompare(b.fullName, 'vi'));
+  openModal(`<div id="clsDetail" data-c="${cid}"></div>
+    <h3 style="border-left:5px solid ${esc(c.color)};padding-left:8px">${esc(c.className)} · ${ms.length}${Number(c.maxStudents) ? '/' + c.maxStudents : ''} học sinh</h3>
+    ${edit ? `<div class="row"><select class="input grow" id="addStu"><option value="">➕ Chọn học sinh để thêm…</option>${others.map(s => `<option value="${s.studentId}">${esc(s.fullName)} (${esc(s.code || '…')})</option>`).join('')}</select><button class="btn primary" id="btnAdd">Thêm</button></div>` : ''}
+    ${ms.map(m => { const s = Store.data.Students[m.studentId] || {};
+      return `<div class="card ${m._sync === 'pending' ? 'sync-pending' : ''}"><div class="row"><b class="grow">${esc(s.fullName || '…')}</b>${syncBadge(m)}</div>
+      <div class="muted small">Vào lớp: ${esc(m.joinDate)}${m.customFee !== '' && m.customFee != null ? ' · Phí riêng: ' + money(m.customFee) : ''}</div>
+      ${edit ? `<div class="row" style="margin-top:6px"><button class="btn" onclick="memFee('${m.memberId}')">💰 Phí riêng</button>
+      <button class="btn" onclick="memTransfer('${m.memberId}')">🔀 Chuyển lớp</button><button class="btn danger" onclick="memLeave('${m.memberId}')">🚪 Rời lớp</button></div>` : ''}</div>`; }).join('') || '<p class="muted">Lớp chưa có học sinh</p>'}
+    <button class="btn ghost block" onclick="closeModal()">Đóng</button>`);
+  if (edit) $('#btnAdd').onclick = () => {
+    const sid = $('#addStu').value; if (!sid) return toast('Hãy chọn học sinh', 'warn');
+    if (Number(c.maxStudents) && ms.length >= Number(c.maxStudents)) return toast('Lớp đã đủ sĩ số', 'warn');
+    Store.mutate('ClassMembers', 'mem_' + rnd(6), 'create', { classId: cid, studentId: sid, joinDate: today(), status: 'ACTIVE' });
+  };
+}
+function memLeave(id) {
+  const s = Store.data.Students[Store.data.ClassMembers[id].studentId] || {};
+  if (confirm('Cho ' + (s.fullName || 'học sinh') + ' rời lớp?')) Store.mutate('ClassMembers', id, 'leave', { status: 'LEFT', leaveDate: today() });
+}
+function memFee(id) {
+  const m = Store.data.ClassMembers[id], v = prompt('Học phí riêng cho học sinh này (đ). Để trống = theo học phí lớp:', m.customFee ?? '');
+  if (v === null) return;
+  const val = v.trim() === '' ? '' : Number(v.replace(/\D/g, ''));
+  Store.mutate('ClassMembers', id, 'update', { customFee: val });
+}
+function memTransfer(id) {
+  const m = Store.data.ClassMembers[id], s = Store.data.Students[m.studentId] || {}, back = m.classId;
+  const targets = live('Classes').filter(c => c.status === 'ACTIVE' && c.classId !== m.classId && !membersOf(c.classId).some(x => x.studentId === m.studentId));
+  openModal(`<h3>🔀 Chuyển lớp: ${esc(s.fullName)}</h3><label class="lb">Chọn lớp mới</label>
+    <select class="input" id="toCls">${targets.map(c => `<option value="${c.classId}">${esc(c.className)} (${membersOf(c.classId).length}${Number(c.maxStudents) ? '/' + c.maxStudents : ''})</option>`).join('')}</select>
+    <label class="lb"><input type="checkbox" id="keepFee" checked> Giữ học phí riêng (nếu có)</label>
+    <button class="btn primary block" id="doTr" ${targets.length ? '' : 'disabled'}>Chuyển</button><button class="btn ghost block" onclick="openClassDetail('${back}')">← Quay lại</button>`);
+  $('#doTr').onclick = () => {
+    const to = $('#toCls').value; if (!to) return;
+    const fee = $('#keepFee').checked ? m.customFee : '';
+    mutateMany([{ type: 'ClassMembers', id, op: 'leave', patch: { status: 'LEFT', leaveDate: today(), note: 'Chuyển sang ' + Store.data.Classes[to].className } },
+      { type: 'ClassMembers', id: 'mem_' + rnd(6), op: 'create', patch: { classId: to, studentId: m.studentId, customFee: fee, joinDate: today(), status: 'ACTIVE' } }], 'Đã chuyển lớp');
+    openClassDetail(back);
+  };
+}
+</script>

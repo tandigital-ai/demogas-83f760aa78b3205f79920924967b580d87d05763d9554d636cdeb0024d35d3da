@@ -1,0 +1,203 @@
+<script>
+const MOD_LB = { dashboard:'Tổng quan', students:'Học sinh', classes:'Lớp học', sessions:'Lịch dạy', attendance:'Điểm danh',
+  journal:'Nhật ký buổi', scores:'Điểm số', fees:'Học phí', payments:'Thanh toán', receipts:'Phiếu thu', comments:'Nhận xét',
+  materials:'Học liệu', assignments:'Bài tập', submissions:'Bài nộp', reports:'Báo cáo', ai:'AI', notifications:'Thông báo',
+  feedback:'Phản hồi', settings:'Cài đặt', users:'Người dùng', roles:'Phân quyền', audit:'Nhật ký hệ thống' };
+const ACT_LB = { view:'Xem', create:'Thêm', update:'Sửa', delete:'Xóa', export:'Xuất', import:'Nhập', cancel:'Hủy', generate:'Sinh phí',
+  void:'Hủy phiếu', send:'Gửi', grade:'Chấm', revenue:'Doanh thu', use:'Dùng', lock:'Khóa' };
+const ROLE_LB = r => (Store.data.Roles[r] || {}).roleName || r;
+const SOON = { schedule:3, classes:2, students:2, attendance:4, scores:5, fees:6, assignments:8, materials:8, comments:7, reports:8, ai:7 };
+
+const Views = {
+  _soon: { render() { $('#main').innerHTML = `<div class="card"><h3>🚧 Đang xây dựng</h3><p class="muted">Chức năng này sẽ có ở Gói ${SOON[App.view] || 'sau'}.</p></div>`; } },
+
+  today: { render() {
+    const q = App.aiQuota || { used: 0, limit: 0 };
+    $('#main').innerHTML = `<div class="card"><h3>👋 Xin chào, ${esc(App.me.fullName)}</h3>
+      <p class="muted">Vai trò: <b>${esc(App.me.roleName)}</b> · Lượt AI hôm nay: <b>${q.used}/${q.limit}</b></p></div>
+      <div class="card"><h3>📅 Lịch dạy hôm nay</h3><p class="muted">Sẽ hiển thị ở Gói 3 (kèm nút Điểm danh, Ghi nhật ký).</p></div>`; } },
+
+  /* ---------- NGƯỜI DÙNG + VAI TRÒ ---------- */
+  users: {
+    watch: ['Users', 'Roles'],
+    load() { return call('usersList').then(d => { Store.setAll('Users', d.users, 'userId'); Store.setAll('Roles', d.roles, 'roleId'); }); },
+    render() {
+      const tab = App.tab.users || 'users';
+      const head = `<div class="tabs"><div class="tab ${tab === 'users' ? 'active' : ''}" onclick="App.tab.users='users';render()">👥 Người dùng</div>
+        ${can('roles', 'view') ? `<div class="tab ${tab === 'roles' ? 'active' : ''}" onclick="App.tab.users='roles';render()">🛡️ Vai trò</div>` : ''}</div>`;
+      if (tab === 'roles') {
+        $('#main').innerHTML = head + '<div class="grid">' + Object.values(Store.data.Roles).map(r => `<div class="card">
+          <div class="row"><b class="grow">${esc(r.roleName)}</b>${syncBadge(r)}</div>
+          <p class="muted small">${esc(r.description || '')} · Phạm vi: ${esc(r.dataScope)}</p>
+          ${r.roleId === 'ADMIN' ? '<span class="badge">Toàn quyền – cố định</span>' :
+            can('roles', 'update') ? `<button class="btn" onclick="openRoleMatrix('${r.roleId}')">✏️ Sửa quyền vai trò</button>` : ''}</div>`).join('') + '</div>';
+        return;
+      }
+      const list = Object.values(Store.data.Users).sort((a, b) => String(a.fullName).localeCompare(b.fullName));
+      $('#main').innerHTML = head + `<input class="input" id="uSearch" placeholder="🔍 Tìm tên, email…" value="${esc(App.uq || '')}">` +
+        '<div class="grid">' + list.filter(u => !App.uq || (u.fullName + u.email).toLowerCase().includes(App.uq.toLowerCase()))
+        .map(u => `<div class="card ${u._sync === 'pending' ? 'sync-pending' : ''}">
+          <div class="row"><b class="grow">${esc(u.fullName)}</b>${syncBadge(u)}</div>
+          <div class="muted small">${esc(u.email)}</div>
+          <div class="row" style="margin:8px 0"><span class="badge">${esc(ROLE_LB(u.role))}</span>
+            <span class="badge ${u.status === 'ACTIVE' ? 'ok' : 'err'}">${u.status === 'ACTIVE' ? 'Hoạt động' : '🔒 Đã khóa'}</span>
+            ${u.permissionsOverrideJson && u.permissionsOverrideJson.length > 22 ? '<span class="badge warn">Quyền riêng</span>' : ''}</div>
+          ${u.userId === App.me.userId ? '<span class="muted small">(Tài khoản của bạn)</span>' : `<div class="row">
+            ${can('users', 'update') ? `<button class="btn" onclick="openUserForm('${u.userId}')">✏️ Sửa</button>` : ''}
+            ${can('roles', 'update') ? `<button class="btn" onclick="openUserMatrix('${u.userId}')">🛡️ Quyền</button>` : ''}
+            ${can('users', 'lock') ? `<button class="btn ${u.status === 'ACTIVE' ? 'danger' : ''}" onclick="toggleLock('${u.userId}')">${u.status === 'ACTIVE' ? '🔒 Khóa' : '🔓 Mở'}</button>` : ''}</div>`}
+        </div>`).join('') + '</div>' + (can('users', 'create') ? '<button class="fab" onclick="openUserForm()">＋</button>' : '');
+      const s = $('#uSearch'); s.oninput = () => { App.uq = s.value; render(); const n = $('#uSearch'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+    }
+  },
+
+  /* ---------- CÀI ĐẶT ---------- */
+  settings: {
+    watch: ['Settings'],
+    load() { return call('settingsGet').then(d => Store.setAll('Settings', d.settings, 'key'))
+      .then(() => call('aiStatus')).then(a => App.ai = a); },
+    render() {
+      const tab = App.tab.settings || 'general', S = Store.data.Settings, edit = can('settings', 'update');
+      const field = k => { const s = S[k]; if (!s) return ''; const dis = edit ? '' : 'disabled';
+        const inp = s.type === 'boolean' ? `<select class="input" ${dis} onchange="saveSetting('${k}',this.value)"><option value="true" ${s.value === 'true' ? 'selected' : ''}>Bật</option><option value="false" ${s.value === 'false' ? 'selected' : ''}>Tắt</option></select>`
+          : `<input class="input" ${dis} type="${s.type === 'color' ? 'color' : s.type === 'number' ? 'number' : 'text'}" value="${esc(s.value)}" onchange="saveSetting('${k}',this.value)">`;
+        return `<label class="lb">${esc(s.label)} ${syncBadge(s)}</label>${inp}`; };
+      const head = `<div class="tabs">${['general:🏫 Chung', 'ai:✨ AI'].map(t => { const [id, lb] = t.split(':');
+        return `<div class="tab ${tab === id ? 'active' : ''}" onclick="App.tab.settings='${id}';render()">${lb}</div>`; }).join('')}</div>`;
+      if (tab === 'general') {
+        $('#main').innerHTML = head + '<div class="card">' + ['CENTER_NAME', 'CENTER_ADDRESS', 'CENTER_PHONE', 'CENTER_LOGO_URL', 'THEME_COLOR', 'SCHOOL_YEAR', 'SYNC_POLL_SECONDS', 'AUTH_SESSION_DAYS'].map(field).join('') + '</div>';
+        return;
+      }
+      const a = App.ai || {};
+      $('#main').innerHTML = head + `<div class="card"><h3>🔑 API key Gemini</h3>
+        <p class="muted small">Key được lưu trong Script Properties trên máy chủ, không bao giờ gửi về trình duyệt. Hỗ trợ cả key cũ (Standard) và key mới (Authorization). Key chính lỗi thì tự chuyển sang key dự phòng.</p>
+        ${['primary:Key chính', 'backup:Key dự phòng'].map(x => { const [w, lb] = x.split(':'); return `
+          <label class="lb">${lb}: <b>${a[w] ? esc(a[w]) : '<span class="badge err">Chưa có</span>'}</b></label>
+          ${edit ? `<input class="input" id="key_${w}" type="password" placeholder="Dán key mới (AIza…) nếu muốn thay">
+          <div class="row"><button class="btn" onclick="testKey('${w}')">🧪 Test</button>
+          <button class="btn primary" onclick="saveKey('${w}')">💾 Test & Lưu</button>
+          ${w === 'backup' && a.backup ? `<button class="btn danger" onclick="removeBackup()">Xóa</button>` : ''}</div>` : ''}`; }).join('')}
+        </div>
+        <div class="card"><h3>🤖 Model</h3>
+          <label class="lb">Model đang dùng ${syncBadge(S.AI_MODEL)}</label>
+          <div class="row"><select class="input grow" id="modelSel" ${edit ? '' : 'disabled'}>
+            ${(App.models || [{ id: S.AI_MODEL && S.AI_MODEL.value }]).map(m => `<option value="${esc(m.id)}" ${S.AI_MODEL && m.id === S.AI_MODEL.value ? 'selected' : ''}>${esc(m.id)}${m.name ? ' – ' + esc(m.name) : ''}</option>`).join('')}
+          </select></div>
+          ${edit ? `<div class="row"><button class="btn" onclick="loadModels()">🔄 Tải danh sách model</button>
+          <button class="btn" onclick="testKey('primary', $('#modelSel').value)">🧪 Test model</button>
+          <button class="btn primary" onclick="saveSetting('AI_MODEL', $('#modelSel').value)">💾 Lưu model</button></div>` : ''}
+          ${field('AI_ENABLED')}${field('AI_TEMPERATURE')}</div>
+        <div class="card"><h3>📊 Giới hạn lượt AI mỗi ngày</h3>
+          <p class="muted small">Thứ tự áp dụng: giới hạn riêng của người dùng → giới hạn theo vai trò → mặc định. Số 0 = không được dùng AI.</p>
+          ${['AI_LIMIT_DEFAULT', 'AI_LIMIT_ADMIN', 'AI_LIMIT_TEACHER', 'AI_LIMIT_ASSISTANT', 'AI_LIMIT_ACCOUNTANT', 'AI_LIMIT_PARENT', 'AI_LIMIT_STUDENT', 'AI_CENTER_DAILY_LIMIT'].map(field).join('')}
+        </div>`;
+    }
+  }
+};
+
+/* ---------- Hành động: Cài đặt ---------- */
+function saveSetting(key, value) {
+  if (!Store.data.Settings[key] || String(Store.data.Settings[key].value) === String(value)) return;
+  Store.mutate('Settings', key, 'update', { value: String(value) });
+  if (key === 'THEME_COLOR') document.documentElement.style.setProperty('--pri', value);
+  if (key === 'CENTER_NAME') $('#brandName').textContent = value;
+}
+function busy(btnText) { toast(btnText + '…'); }
+function testKey(which, model) {
+  const el = $('#key_' + which), key = el && el.value.trim();
+  busy('Đang test');
+  call('aiTestKey', { which, key, model }).then(r => toast(`✅ Key hoạt động với ${r.model} (${r.latencyMs} ms)`, 'ok'))
+    .catch(e => toast('❌ ' + e.message, 'err'));
+}
+function saveKey(which) {
+  const key = $('#key_' + which).value.trim(); if (!key) return toast('Hãy dán key vào ô trước', 'warn');
+  busy('Đang test & lưu');
+  call('aiSaveKey', { which, key }).then(a => { App.ai = a; toast('✅ Đã lưu key', 'ok'); render(); })
+    .catch(e => toast('❌ Chưa lưu: ' + e.message, 'err'));
+}
+function removeBackup() {
+  if (!confirm('Xóa key dự phòng?')) return;
+  call('aiSaveKey', { which: 'backup', remove: true }).then(a => { App.ai = a; render(); toast('Đã xóa key dự phòng', 'ok'); })
+    .catch(e => toast(e.message, 'err'));
+}
+function loadModels() {
+  busy('Đang tải danh sách model');
+  call('aiListModels', {}).then(d => { App.models = d.models; render(); toast('Tìm thấy ' + d.models.length + ' model', 'ok'); })
+    .catch(e => toast('❌ ' + e.message, 'err'));
+}
+
+/* ---------- Hành động: Người dùng ---------- */
+function roleOptions(sel) {
+  return Object.values(Store.data.Roles).map(r => `<option value="${r.roleId}" ${r.roleId === sel ? 'selected' : ''}>${esc(r.roleName)}</option>`).join('');
+}
+function openUserForm(id) {
+  const u = id ? Store.data.Users[id] : { fullName: '', email: '', phone: '', role: 'TEACHER', aiDailyLimit: '' };
+  openModal(`<h3>${id ? '✏️ Sửa người dùng' : '➕ Thêm người dùng'}</h3>
+    <label class="lb">Họ tên *</label><input class="input" id="fName" value="${esc(u.fullName)}">
+    <label class="lb">Email * ${id ? '(không đổi được)' : ''}</label><input class="input" id="fEmail" type="email" value="${esc(u.email)}" ${id ? 'disabled' : ''}>
+    <label class="lb">Số điện thoại</label><input class="input" id="fPhone" value="${esc(u.phone)}">
+    <label class="lb">Vai trò</label><select class="input" id="fRole">${roleOptions(u.role)}</select>
+    ${id ? `<label class="lb">Giới hạn AI riêng/ngày (để trống = theo vai trò)</label><input class="input" id="fAi" type="number" min="0" value="${esc(u.aiDailyLimit)}">` : ''}
+    <button class="btn primary block" id="fSave">💾 Lưu</button><button class="btn ghost block" onclick="closeModal()">Hủy</button>`);
+  $('#fSave').onclick = () => {
+    const p = { fullName: $('#fName').value.trim(), phone: $('#fPhone').value.trim(), role: $('#fRole').value };
+    if (!p.fullName) return toast('Thiếu họ tên', 'warn');
+    if (id) { p.aiDailyLimit = $('#fAi').value.trim(); closeModal(); Store.mutate('Users', id, 'update', p); }
+    else {
+      p.email = $('#fEmail').value.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) return toast('Email không hợp lệ', 'warn');
+      if (Object.values(Store.data.Users).some(x => x.email.toLowerCase() === p.email)) return toast('Email đã tồn tại', 'warn');
+      closeModal(); Store.mutate('Users', 'user_' + rnd(6), 'create', Object.assign(p, { status: 'ACTIVE' }));
+    }
+  };
+}
+function toggleLock(id) {
+  const u = Store.data.Users[id], next = u.status === 'ACTIVE' ? 'LOCKED' : 'ACTIVE';
+  if (next === 'LOCKED' && !confirm('Khóa tài khoản ' + u.fullName + '? Người này sẽ bị đăng xuất.')) return;
+  Store.mutate('Users', id, 'update', { status: next });
+}
+
+/* ---------- Bảng quyền 3 trạng thái (người dùng) & 2 trạng thái (vai trò) ---------- */
+function rolePerms(roleId) {
+  const r = Store.data.Roles[roleId] || {}; let p = r.permissions || {};
+  if (p['*']) { p = {}; Object.keys(App.modules).forEach(m => p[m] = App.modules[m].slice()); }
+  return p;
+}
+function openUserMatrix(id) {
+  const u = Store.data.Users[id], base = rolePerms(u.role);
+  let ov = {}; try { ov = JSON.parse(u.permissionsOverrideJson || '{}'); } catch (e) {}
+  const st = {}; // trạng thái mỗi ô: role | grant | deny
+  Object.keys(App.modules).forEach(m => App.modules[m].forEach(a => {
+    st[m + '.' + a] = (ov.deny && (ov.deny[m] || []).includes(a)) ? 'deny' : (ov.grant && (ov.grant[m] || []).includes(a)) ? 'grant' : 'role';
+  }));
+  const draw = () => Object.keys(App.modules).map(m => `<div class="perm-row"><b>${MOD_LB[m] || m}</b>${App.modules[m].map(a => {
+    const k = m + '.' + a, s = st[k], has = (base[m] || []).includes(a);
+    const cls = s === 'grant' ? 'grant' : s === 'deny' ? 'deny' : has ? 'on' : 'off';
+    const ic = s === 'grant' ? '➕ ' : s === 'deny' ? '⛔ ' : has ? '✓ ' : '· ';
+    return `<span class="chip ${cls}" data-k="${k}">${ic}${ACT_LB[a] || a}</span>`; }).join('')}</div>`).join('');
+  openModal(`<h3>🛡️ Quyền của ${esc(u.fullName)}</h3>
+    <p class="muted small">Vai trò: <b>${esc(ROLE_LB(u.role))}</b>. Bấm vào ô để đổi: <span class="chip on">✓ theo vai trò</span><span class="chip grant">➕ cho phép thêm</span><span class="chip deny">⛔ chặn</span></p>
+    <div id="mx">${draw()}</div>
+    <button class="btn primary block" id="mxSave">💾 Lưu quyền</button><button class="btn ghost block" onclick="closeModal()">Hủy</button>`);
+  $('#mx').onclick = e => { const k = e.target.dataset.k; if (!k) return;
+    st[k] = { role: 'grant', grant: 'deny', deny: 'role' }[st[k]]; $('#mx').innerHTML = draw(); };
+  $('#mxSave').onclick = () => {
+    const out = { grant: {}, deny: {} };
+    Object.keys(st).forEach(k => { const [m, a] = k.split('.'); if (st[k] !== 'role') (out[st[k]][m] = out[st[k]][m] || []).push(a); });
+    closeModal(); Store.mutate('Users', id, 'update', { permissionsOverrideJson: JSON.stringify(out) });
+  };
+}
+function openRoleMatrix(roleId) {
+  const r = Store.data.Roles[roleId], cur = rolePerms(roleId), st = {};
+  Object.keys(App.modules).forEach(m => App.modules[m].forEach(a => st[m + '.' + a] = (cur[m] || []).includes(a)));
+  const draw = () => Object.keys(App.modules).map(m => `<div class="perm-row"><b>${MOD_LB[m] || m}</b>${App.modules[m].map(a =>
+    `<span class="chip ${st[m + '.' + a] ? 'on' : 'off'}" data-k="${m}.${a}">${st[m + '.' + a] ? '✓ ' : '· '}${ACT_LB[a] || a}</span>`).join('')}</div>`).join('');
+  openModal(`<h3>🛡️ Quyền vai trò: ${esc(r.roleName)}</h3><p class="muted small">Áp dụng cho mọi người có vai trò này (trừ khi chỉnh riêng).</p>
+    <div id="mx">${draw()}</div><button class="btn primary block" id="mxSave">💾 Lưu</button><button class="btn ghost block" onclick="closeModal()">Hủy</button>`);
+  $('#mx').onclick = e => { const k = e.target.dataset.k; if (!k) return; st[k] = !st[k]; $('#mx').innerHTML = draw(); };
+  $('#mxSave').onclick = () => {
+    const perms = {}; Object.keys(st).forEach(k => { if (st[k]) { const [m, a] = k.split('.'); (perms[m] = perms[m] || []).push(a); } });
+    closeModal(); Store.mutate('Roles', roleId, 'update', { permissions: perms, permissionsJson: JSON.stringify(perms) });
+  };
+}
+</script>

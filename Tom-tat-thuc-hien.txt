@@ -1,0 +1,220 @@
+# Gói 1: Đăng nhập OTP, phân quyền động, giao diện mobile-first và Cài đặt AI
+
+Em đã ghi nhận: **đăng nhập bằng OTP qua email, Gmail cá nhân, bảng phân quyền 3 trạng thái, model `gemini-2.5-flash` đổi được bằng nút trong Cài đặt.**
+
+## Trước khi bắt đầu, em đã kiểm tra tài liệu Google mới nhất về API key Gemini
+
+| Điều Google công bố | Gói này xử lý thế nào |
+|---|---|
+| Từ 28/05/2026, key mới tạo trong AI Studio là loại **"Authorization key"**. Key cũ là loại **"Standard"**. Key Standard không giới hạn sẽ bị từ chối. Theo bài phân tích của DoiT, đến tháng 9/2026 mọi key Standard đều ngừng hoạt động. | Cả hai loại key được gửi theo cùng một cách (header `x-goog-api-key`). App có nút **Test key**. Nếu Google từ chối key cũ, app báo rõ và hướng dẫn tạo key mới. |
+| Key cũ bỏ lâu không dùng có thể bị khóa ("Blocked"). | App có **2 ô key: Key chính và Key dự phòng**. Key chính lỗi thì app tự chuyển sang key dự phòng. |
+| `gemini-2.5-flash` vẫn đang được Google cung cấp, và đã có các model mới hơn. | Nút **"Tải danh sách model"** lấy danh sách model mà key của anh thực sự dùng được, để anh chọn. |
+
+👉 **Lời khuyên:** anh vào trang https://aistudio.google.com/api-keys và xem cột **Key Type**. Nếu key đang dùng là loại Standard, anh nên tạo thêm một key mới, đặt key mới làm **Key chính** và key cũ làm **Dự phòng**.
+
+---
+
+## 1. Gói 1 làm được gì
+
+| Thành phần | Kết quả |
+|---|---|
+| Đăng nhập | Nhập email, nhận mã 6 số qua email, đăng nhập. Thiết bị được ghi nhớ 30 ngày. App thử tự nhận diện chủ sở hữu (anh), không được thì anh đăng nhập OTP như mọi người. |
+| Phân quyền động | Mỗi lệnh từ trình duyệt đều đi qua **một cửa duy nhất** là hàm `api`. Ở đó server kiểm tra phiên đăng nhập, tài khoản có bị khóa không, và quyền của người đó. |
+| Bảng quyền | Màn **Người dùng**: thêm, sửa, khóa người dùng. Mỗi người có bảng quyền 3 trạng thái. Có thêm tab **Vai trò** để sửa quyền mặc định của từng vai trò. |
+| Cài đặt | Tab **Chung**: tên trung tâm, màu, chu kỳ đồng bộ. Tab **AI**: 2 key, Test key, tải danh sách model, giới hạn lượt/ngày theo vai trò và toàn trung tâm. |
+| Optimistic update | Sửa người dùng, quyền, cài đặt thì màn hình đổi **ngay**. Có đủ các trạng thái: chờ, đã lưu, hoàn tác khi lỗi, xử lý xung đột, xếp hàng khi offline. |
+| Giao diện | Máy tính có thanh menu bên trái. Điện thoại có thanh menu dưới đáy và menu ☰. Có chế độ sáng/tối. |
+
+**Em chủ động thu gọn những phần sau để gói vừa sức một lần làm:** màn "Hôm nay" mới là khung chờ (làm thật ở Gói 3). Hàm đồng bộ `syncSince` mới báo *bản ghi nào vừa đổi*, chưa tải dữ liệu chi tiết; Gói 2 sẽ mở rộng. Các menu khác hiện "Sẽ có ở Gói X".
+
+---
+
+## 2. Các bước thực hiện
+
+### Bước 1: Tạo file mới
+Trong Apps Script, bấm **＋**:
+- Chọn **Tập lệnh** và tạo 6 file: `Db_`, `Auth_`, `Perm_`, `Sync_`, `Ai_`, `Api`.
+- Chọn **HTML** và tạo 4 file: `Index`, `Css`, `JsCore`, `JsViews`.
+
+Gõ tên **chính xác**, có phân biệt chữ hoa và chữ thường.
+
+Các file của Gói 0 (`Config`, `Utils_`, `Setup_`) **giữ nguyên**. Riêng `Code.gs` thì dán đè bằng bản mới bên dưới.
+
+Cách dán cho mọi file: mở file, bấm **Ctrl+A**, dán nội dung, rồi bấm **Ctrl+S**.
+
+
+---
+
+### Bước 2: Cấp quyền mới
+1. Bấm **Ctrl+S** để lưu tất cả.
+2. Chọn hàm **`capQuyenGoi1`** rồi bấm **▶ Chạy**.
+3. Google sẽ hỏi thêm 2 quyền mới là *gửi email* và *kết nối dịch vụ bên ngoài*. Anh bấm **Cho phép** như ở Gói 0.
+
+### Bước 3: Triển khai WebApp
+1. Bấm nút **Triển khai** (góc trên bên phải), chọn **Tùy chọn triển khai mới**.
+2. Bấm biểu tượng ⚙️ cạnh chữ "Chọn loại", chọn **Ứng dụng web**.
+3. Điền như sau:
+   - **Thực thi với tư cách:** *Tôi*.
+   - **Người có quyền truy cập:** *Bất kỳ ai*.
+4. Bấm **Triển khai** và **sao chép đường link Ứng dụng web**.
+
+⚠️ **Mỗi lần dán code mới ở các gói sau**, anh vào **Triển khai → Quản lý các bản triển khai → ✏️ → Phiên bản: Phiên bản mới → Triển khai**. Làm vậy đường link giữ nguyên, không đổi.
+
+---
+
+## 3. Checklist kiểm tra Gói 1
+
+| # | Thử | Kết quả đúng |
+|---|---|---|
+| 1 | Mở link WebApp trên máy tính | App tự đăng nhập bằng tài khoản Admin của anh. Nếu app hiện màn đăng nhập thì anh nhập email của mình và nhận mã OTP; trường hợp này vẫn đúng. |
+| 2 | Mở link trên điện thoại | Hiện màn đăng nhập. Nhập email, nhận mã qua email, đăng nhập được. Có thanh menu dưới đáy. |
+| 3 | Vào **Cài đặt → AI**, bấm 🧪 **Test** ở Key chính | Hiện "✅ Key hoạt động với gemini-2.5-flash". |
+| 4 | Bấm 🔄 **Tải danh sách model**, chọn một model, bấm **Lưu model** | Ô đổi ngay, hiện ⏳ rồi "Đã lưu ✓". |
+| 5 | Đổi `AI_LIMIT_TEACHER` thành 40 | Lưu ngay. Mở sheet Settings thấy giá trị 40. |
+| 6 | Vào **Người dùng**, bấm ＋, thêm email thật của một người quen với vai trò Giáo viên | Thẻ người dùng mới hiện ngay, hiện ⏳ rồi chuyển sang đã lưu. |
+| 7 | Bấm 🛡️ **Quyền** của người đó, chặn "Học phí – Xem", lưu. Người đó đăng nhập | Người đó không thấy menu Học phí. |
+| 8 | Khóa người đó | Lần thao tác kế tiếp, người đó bị đăng xuất với thông báo "Tài khoản đã bị khóa". |
+| 9 | Kiểm tra sheet **MutationLog** và **AuditLog** | Có dòng ghi lại các thao tác ở trên. |
+| 10 | Tắt wifi rồi đổi một cài đặt | Hiện "📴 Chờ mạng". Bật wifi lại thì tự gửi. |
+
+**Nếu gặp lỗi:** anh chụp màn hình thông báo đỏ, kèm phần **Nhật ký thực thi** (trong Apps Script, bấm biểu tượng ☰ **Lần thực thi** ở thanh bên trái), rồi gửi em.
+
+---
+
+## 4. Ghi chú kỹ thuật (anh không cần làm gì)
+
+- **Lỗi bảo mật A1 của bản mẫu đã được xử lý.** Trình duyệt chỉ gọi được 1 hàm là `api`, và hàm đó kiểm tra phiên đăng nhập cùng quyền trước mọi thao tác. API key không bao giờ được gửi về trình duyệt.
+- **Em bổ sung 2 mã lỗi mới:** `AUTH_REQUIRED` (chưa đăng nhập) và `ACCOUNT_LOCKED` (tài khoản bị khóa).
+- **Chống tự khóa mình:** anh không thể tự khóa, tự đổi vai trò, hoặc tự sửa quyền của chính tài khoản mình. Vai trò ADMIN luôn có toàn quyền.
+- **Cài đặt không có số phiên bản:** dữ liệu Cài đặt áp dụng nguyên tắc "lần lưu sau cùng thắng". Người dùng và Vai trò thì có kiểm tra version để chống xung đột.
+
+---
+
+## 5. Cần anh xác nhận trước Gói 2 (Học sinh, Lớp, Thành viên lớp)
+
+**Câu D. Mã học sinh:** ⭐ **D1.** Tự sinh `HS0001`, `HS0002`… · **D2.** Có tiền tố theo năm, ví dụ `HS26-0001` · **D3.** Anh tự nhập.
+
+**Câu E. Tài khoản phụ huynh:** ⭐ **E1.** Khi thêm học sinh có email phụ huynh, app tự tạo tài khoản Phụ huynh và gắn với con. Nếu phụ huynh có nhiều con, các con gom chung một tài khoản theo email. · **E2.** Admin tự tạo bằng tay.
+
+**Câu F. Import học sinh:** ⭐ **F1.** Dán từ Excel hoặc Google Sheets (copy vùng dữ liệu rồi dán vào ô), có bước xem trước trước khi lưu · **F2.** Chọn một file Google Sheets có sẵn trong Drive.
+
+Anh chạy xong checklist, gửi em **kết quả + câu trả lời D, E, F**, em sẽ làm **Gói 2**.
+
+---
+xác nhận : đã xong gói 1, em làm tiếp Gói 2 (Học sinh, Lớp, Thành viên lớp): Câu D. Mã học sinh: ⭐ D1.; Câu E. Tài khoản phụ huynh: ⭐ E1. Khi thêm học sinh có email phụ huynh, app tự tạo tài khoản Phụ huynh và gắn với con. Nếu phụ huynh có nhiều con, các con gom chung một tài khoản theo email; Câu F. Import học sinh: ⭐ F1. Dán từ Excel hoặc Google Sheets (copy vùng dữ liệu rồi dán vào ô), có bước xem trước trước khi lưu 
+
+---
+
+# Gói 2: Học sinh, Lớp học, Thành viên lớp
+
+Em đã ghi nhận lựa chọn của anh:
+
+- **D1:** mã học sinh tự sinh HS0001, HS0002…
+- **E1:** tự tạo tài khoản phụ huynh và gom các con theo email phụ huynh.
+- **F1:** import bằng cách dán dữ liệu, có bước xem trước.
+
+## 1. Gói 2 làm được gì
+
+| Phần | Tính năng | Cập nhật ngay trên màn hình |
+|---|---|---|
+| Học sinh | Thêm, sửa, lưu trữ (xóa mềm). Tìm theo tên, mã, SĐT. Lọc theo trạng thái và lớp. Xem hồ sơ học sinh. | ✅ |
+| Mã học sinh | Máy chủ tự cấp mã HS0007, HS0008… (nối tiếp dữ liệu mẫu). Trong lúc chờ, thẻ hiện "Đang cấp mã…". | ✅ |
+| Tài khoản phụ huynh | Khi lưu học sinh có email phụ huynh: nếu email chưa có thì tạo tài khoản Phụ huynh; nếu đã có thì gắn thêm con vào tài khoản đó. | ✅ |
+| Import | Dán dữ liệu, xem trước với các dấu ✅ hợp lệ, ⚠️ trùng, ❌ lỗi, rồi lưu. App gửi theo lô 25 dòng một lần. Có thể xếp tất cả vào một lớp. | ✅ |
+| Lớp học | Tạo, sửa, nhân bản (có thể chép luôn học sinh), đổi trạng thái tạm dừng / kết thúc. Chọn lịch cố định bằng cách bấm các thứ trong tuần. Chọn màu lớp, giáo viên, trợ giảng. | ✅ |
+| Thành viên lớp | Thêm học sinh vào lớp, đặt phí riêng, cho rời lớp, chuyển lớp. Chuyển lớp gồm 2 thao tác "rời lớp cũ, vào lớp mới" gửi chung một lần. | ✅ |
+| Phân quyền | Giáo viên và trợ giảng chỉ thấy lớp mình phụ trách và học sinh của các lớp đó. Máy chủ kiểm tra lại quyền ở mọi thao tác. | — |
+
+**Phần em thu gọn để gói vừa sức một lần làm:**
+
+- Lọc theo công nợ và chuyên cần sẽ có ở Gói 4 và Gói 6.
+- Xuất danh sách lớp và bảng điểm sẽ có ở Gói 8.
+- Hồ sơ học sinh hiện mới có thông tin, phụ huynh và lịch sử lớp. Điểm, phí, nhận xét và AI sẽ được thêm dần ở các gói sau.
+- Lịch cố định dùng **một khung giờ chung** cho các thứ được chọn. Nếu lớp học các ngày với giờ khác nhau, Gói 3 sẽ cho chỉnh từng buổi.
+
+---
+
+## 2. Các bước thực hiện
+
+### Bước 1: Tạo 3 file mới
+Trong Apps Script, bấm **＋** để tạo:
+
+- 2 file loại **Tập lệnh**: `Students_` và `Classes_`
+- 1 file loại **HTML**: `JsPeople`
+
+---
+
+### Bước 2: Sửa 6 chỗ nhỏ trong file cũ (Ctrl+H)
+
+Cách làm cho từng dòng trong bảng:
+
+1. Mở đúng file, bấm **Ctrl+H**.
+2. Dán chuỗi ở cột **"Tìm"** vào ô trên, dán chuỗi ở cột **"Thay bằng"** vào ô dưới.
+3. Bấm **Thay thế tất cả**. Mỗi chuỗi chỉ xuất hiện **đúng 1 lần** trong file.
+
+| # | File | Tìm (Ctrl+F) | Thay bằng |
+|---|---|---|---|
+| 1 | `Sync_.gs` | `Settings: mutSettings_ };` | `Settings: mutSettings_, Students: mutStudents_, Classes: mutClasses_, ClassMembers: mutMembers_ };` |
+| 2 | `Sync_.gs` | `record: r.after, serverVersion: sv });` | `record: r.after, serverVersion: sv, note: r.note \|\| '' });` |
+| 3 | `Api.gs` | `bootstrap:      { pub: true, fn: apiBootstrap_ },` | `bootstrap:      { pub: true, fn: apiBootstrap_ }, peopleLoad: { fn: apiPeopleLoad_ },` |
+| 4 | `Index.html` | `<?!= include_('JsViews'); ?>` | `<?!= include_('JsViews'); ?><?!= include_('JsPeople'); ?>` |
+| 5 | `JsCore.html` | `data: { Users: {}, Roles: {}, Settings: {} },` | `data: { Users: {}, Roles: {}, Settings: {}, Students: {}, Classes: {}, ClassMembers: {} },` |
+| 6 | `JsCore.html` | `render(); toast('Đã lưu ✓', 'ok');` | `render(); toast(r.note \|\| 'Đã lưu ✓', 'ok');` |
+
+⚠️ Ở dòng 2 và dòng 6, chỗ `\|\|` trong bảng là hai dấu gạch đứng `||`. Khi gõ vào ô Thay bằng, anh gõ **`||`**, không gõ dấu `\`.
+
+💡 **Cách kiểm tra sau khi sửa:** bấm Ctrl+F, gõ `mutMembers_`. Nếu thấy kết quả trong `Sync_.gs` thì dòng 1 đã đúng. Làm tương tự với các dòng khác.
+
+### Bước 3: Lưu và cập nhật bản triển khai
+1. Bấm **Ctrl+S**.
+2. Vào **Triển khai → Quản lý các bản triển khai → ✏️ → Phiên bản: Phiên bản mới → Triển khai**.
+3. Mở link app rồi bấm **F5** để tải lại.
+
+---
+
+## 3. Checklist kiểm tra Gói 2
+
+| # | Thử | Kết quả đúng |
+|---|---|---|
+| 1 | Mở menu **Học sinh** | Thấy 6 học sinh mẫu, kèm tên lớp có màu. |
+| 2 | Bấm ＋, thêm học sinh, nhập email phụ huynh là một email thật của anh, chọn lớp Toán 9A | Thẻ hiện **ngay** với "Đang cấp mã… ⏳", vài giây sau thành **HS0007**. Có thông báo "Đã tạo tài khoản phụ huynh". |
+| 3 | Thêm học sinh thứ hai với **cùng email phụ huynh** đó | Thông báo "Đã gắn vào tài khoản phụ huynh … (2 con)". |
+| 4 | Vào **Người dùng** | Có tài khoản Phụ huynh mới. Trong sheet Users, cột `linkedStudentIds` có 2 mã học sinh. |
+| 5 | Import: gõ 3 dòng trong Google Sheets (Họ tên, Ngày sinh dạng 15/08/2011, Phụ huynh…), copy rồi dán, bấm Xem trước, rồi Lưu | Hiện ✅ 3 hợp lệ, cả 3 thẻ hiện ngay. Import lại lần nữa thì thấy ⚠️ 3 trùng. |
+| 6 | **Lớp học → ＋**: tạo lớp, chọn T3 và T5 lúc 18:00–19:30 | Thẻ lớp hiện ngay, có viền màu. Mã lớp tự sinh L001. |
+| 7 | **📄 Nhân bản** lớp Toán 9A, có tick "sao chép học sinh" | Lớp mới có 5 học sinh. |
+| 8 | Bấm **👥 Học sinh**, rồi **🔀 Chuyển lớp** cho một em | Em đó biến khỏi lớp cũ và có mặt ở lớp mới. Hồ sơ của em thấy lịch sử "Đã rời". |
+| 9 | Đặt **Sĩ số tối đa** = 1, rồi thêm học sinh thứ hai | Bị chặn với thông báo "Lớp đã đủ sĩ số". |
+| 10 | Đăng nhập bằng tài khoản giáo viên thật (đã tạo ở Gói 1) và gán người đó làm GV chính của một lớp | Giáo viên chỉ thấy lớp đó và học sinh của lớp đó. |
+| 11 | Mở cùng một học sinh trên 2 máy, sửa ở máy A, sau đó sửa ở máy B (chưa tải lại) | Máy B hiện cửa sổ **⚡ Xung đột dữ liệu** để chọn bản giữ lại. |
+| 12 | Lưu trữ một học sinh | Thẻ biến mất ngay. Trong sheet, dòng đó **vẫn còn**, cột `deletedAt` có ngày giờ. |
+
+**Nếu gặp lỗi:** anh chụp thông báo đỏ và phần **Lần thực thi** trong Apps Script gửi em.
+
+---
+
+## 4. Ghi chú kỹ thuật (anh không cần làm gì)
+
+- **Mã HS chỉ do máy chủ cấp, và cấp trong lúc hệ thống đang khóa ghi.** Nhờ vậy 2 người thêm học sinh cùng lúc không bị trùng mã.
+- **Lưu trữ học sinh tự cho em đó rời mọi lớp**, nên sĩ số các lớp vẫn đúng.
+- **Một email đang dùng cho tài khoản nhân viên** (ví dụ giáo viên) sẽ không được tự gắn làm phụ huynh. App báo rõ để Admin xử lý bằng tay.
+- **Hiệu năng:** màn Học sinh và màn Lớp tải dữ liệu bằng **một lần gọi** máy chủ. Với khoảng 200 học sinh thì nhanh. Import 25 dòng một lần, mỗi lô mất khoảng 5–15 giây.
+
+---
+
+## 5. Cần anh xác nhận trước Gói 3 (Lịch dạy và màn "Hôm nay")
+
+**Câu G. Tạo buổi học từ lịch cố định:** ⭐ **G1.** Bấm "Sinh lịch" để tạo các buổi từ lịch cố định của lớp, trong khoảng thời gian anh chọn (ví dụ 4 tuần tới hoặc đến ngày kết thúc lớp). Buổi nào đã có thì app bỏ qua. · **G2.** Hệ thống tự sinh mỗi tuần một lần bằng trigger chạy định kỳ.
+
+**Câu H. Ngày nghỉ lễ:** ⭐ **H1.** Có danh sách ngày nghỉ trong Cài đặt; khi sinh lịch, app bỏ qua những ngày này · **H2.** Không cần, khi nghỉ thì anh tự hủy từng buổi.
+
+**Câu I. Đồng bộ Google Calendar:** ⭐ **I1.** Làm luôn ở Gói 3: mỗi buổi học tạo một sự kiện trên Google Calendar của anh, có nút bật/tắt. · **I2.** Để sang Gói 8.
+
+Anh chạy xong checklist, gửi em **kết quả và câu trả lời G, H, I**.
+
+---
+
+Ok, kết quả gói 2 đã Ok. Anh xác nhận trước Gói 3 (Lịch dạy và màn "Hôm nay"):  Câu G. Tạo buổi học từ lịch cố định: ⭐ G1. Bấm "Sinh lịch" để tạo các buổi từ lịch cố định của lớp, trong khoảng thời gian anh chọn (ví dụ 4 tuần tới hoặc đến ngày kết thúc lớp). Buổi nào đã có thì app bỏ qua.; Câu H. Ngày nghỉ lễ: ⭐ H1. Có danh sách ngày nghỉ trong Cài đặt; khi sinh lịch, app bỏ qua những ngày này ;Câu I. Đồng bộ Google Calendar: ⭐ I1. Làm luôn ở Gói 3: mỗi buổi học tạo một sự kiện trên Google Calendar của anh, có nút bật/tắt. Em tiếp tục
+
+---
+
